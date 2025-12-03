@@ -3,29 +3,52 @@ use log::trace;
 use sysinfo::Networks;
 #[cfg(target_os = "linux")]
 mod netlink;
+pub mod traffic_stats;
 
 pub static mut DURATION: f64 = 0.0;
-pub fn realtime_network(network: &Networks) -> Network {
+
+/// 获取系统总流量（用于计费周期统计）
+pub fn get_system_total_traffic(network: &Networks) -> (u64, u64) {
+    let mut total_up = 0;
+    let mut total_down = 0;
+
+    for (name, data) in network {
+        if is_virtual_interface(name) {
+            continue;
+        }
+        total_up += data.total_transmitted();
+        total_down += data.total_received();
+    }
+
+    (total_up, total_down)
+}
+
+/// 检查是否为虚拟网络接口
+#[inline]
+fn is_virtual_interface(name: &str) -> bool {
+    name.contains("br")
+        || name.contains("cni")
+        || name.contains("docker")
+        || name.contains("podman")
+        || name.contains("flannel")
+        || name.contains("lo")
+        || name.contains("veth")
+        || name.contains("virbr")
+        || name.contains("vmbr")
+        || name.contains("tap")
+        || name.contains("tun")
+        || name.contains("fwln")
+        || name.contains("fwpr")
+}
+
+pub fn realtime_network(network: &Networks, traffic_stats: &mut traffic_stats::TrafficStats) -> Network {
     let mut total_up = 0;
     let mut total_down = 0;
     let mut up = 0;
     let mut down = 0;
 
     for (name, data) in network {
-        if name.contains("br")
-            || name.contains("cni")
-            || name.contains("docker")
-            || name.contains("podman")
-            || name.contains("flannel")
-            || name.contains("lo")
-            || name.contains("veth")
-            || name.contains("virbr")
-            || name.contains("vmbr")
-            || name.contains("tap")
-            || name.contains("tun")
-            || name.contains("fwln")
-            || name.contains("fwpr")
-        {
+        if is_virtual_interface(name) {
             continue;
         }
         total_up += data.total_transmitted();
@@ -34,12 +57,15 @@ pub fn realtime_network(network: &Networks) -> Network {
         down += data.received();
     }
 
+    // 更新计费周期的累计流量
+    let (cycle_up, cycle_down) = traffic_stats.update(total_up, total_down);
+
     unsafe {
         let network_info = Network {
             up: (up as f64 / (DURATION / 1000.0)) as u64,
             down: (down as f64 / (DURATION / 1000.0)) as u64,
-            total_up,
-            total_down,
+            total_up: cycle_up,
+            total_down: cycle_down,
         };
         trace!("REALTIME NETWORK 获取成功: {network_info:?}");
         network_info

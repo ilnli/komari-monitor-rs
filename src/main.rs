@@ -2,7 +2,6 @@
 #![allow(
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::similar_names,
     clippy::too_many_lines
@@ -11,6 +10,7 @@
 use crate::callbacks::handle_callbacks;
 use crate::command_parser::Args;
 use crate::data_struct::{BasicInfo, RealTimeInfo};
+use crate::get_info::network::traffic_stats::TrafficStats;
 use crate::utils::{build_urls, connect_ws, init_logger};
 use futures::stream::SplitSink;
 use futures::{SinkExt, StreamExt};
@@ -104,6 +104,20 @@ async fn main() {
 
         basic_info.push(connection_urls.basic_info.clone(), args.ignore_unsafe_cert);
 
+        // 初始化流量统计
+        let mut traffic_stats = TrafficStats::load_or_create(args.billing_day);
+        
+        // 设置初始的系统总流量（用于计算增量）
+        if traffic_stats.last_total_up == 0 && traffic_stats.last_total_down == 0 {
+            let (total_up, total_down) = crate::get_info::network::get_system_total_traffic(&networks);
+            traffic_stats.last_total_up = total_up;
+            traffic_stats.last_total_down = total_down;
+            traffic_stats.save();
+        }
+
+        // 保存计数器，用于定期持久化
+        let mut save_counter: u32 = 0;
+
         loop {
             let start_time = tokio::time::Instant::now();
             sysinfo_sys.refresh_specifics(
@@ -113,7 +127,14 @@ async fn main() {
             );
             networks.refresh(true);
             disks.refresh_specifics(true, DiskRefreshKind::nothing().with_storage());
-            let real_time = RealTimeInfo::build(&sysinfo_sys, &networks, &disks, args.fake);
+            let real_time = RealTimeInfo::build(&sysinfo_sys, &networks, &disks, &mut traffic_stats, args.fake);
+
+            // 每 60 次上报保存一次流量统计（默认间隔下约 1 分钟）
+            save_counter += 1;
+            if save_counter >= 60 {
+                traffic_stats.save();
+                save_counter = 0;
+            }
 
             let json = json::to_string(&real_time);
             {

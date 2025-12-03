@@ -51,6 +51,10 @@ pub struct Args {
     /// 设置日志等级 (反馈问题请开启 Debug 或者 Trace)
     #[arg(long, default_value_t = log_level())]
     pub log_level: LogLevel,
+
+    /// 设置计费日 (每月第几号开始统计流量，默认为1号)
+    #[arg(long, default_value_t = 1)]
+    pub billing_day: u32,
 }
 
 fn terminal_entry() -> String {
