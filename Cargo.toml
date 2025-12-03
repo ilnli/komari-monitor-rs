@@ -1,10 +1,10 @@
 [package]
 name = "komari-monitor-rs"
-version = "0.2.9"
+version = "0.3.0"
 edition = "2024"
-authors = ["GenshinMinecrat <gm@highp.ing>"]
+authors = ["GenshinMinecrat <gm@highp.ing>", "ilnli <220916405+ilnli@users.noreply.github.com>"]
 description = "Komari Monitor Agent in Rust"
-repository = "https://github.com/GenshinMinecraft/ak_monitor_client_rs"
+repository = "https://github.com/ilnli/ak_monitor_client_rs"
 license = "WTFPL"
 
 [dependencies]
