@@ -388,6 +388,7 @@ Komari Monitor RS 安装脚本
   -f, --fake <倍率>         虚假倍率 (默认: 1)
   --realtime-info-interval <ms>  上传间隔毫秒 (默认: 1000)
   --billing-day <日期>      计费日，每月第几号 (默认: 1)
+  --auto-update <小时>      自动升级检查间隔 (默认: 0，禁用)
   --tls                     启用 TLS
   --ignore-unsafe-cert      忽略不安全的证书
   --terminal                启用 Web Terminal 功能
@@ -451,6 +452,7 @@ main() {
     FAKE="1"
     INTERVAL="1000"
     BILLING_DAY="1"
+    AUTO_UPDATE="0"
     TLS_FLAG=""
     IGNORE_CERT_FLAG=""
     TERMINAL_FLAG=""
@@ -473,6 +475,7 @@ main() {
             -f|--fake) FAKE="$2"; shift 2;;
             --realtime-info-interval) INTERVAL="$2"; shift 2;;
             --billing-day) BILLING_DAY="$2"; shift 2;;
+            --auto-update) AUTO_UPDATE="$2"; shift 2;;
             --tls) TLS_FLAG="--tls"; shift 1;;
             --ignore-unsafe-cert) IGNORE_CERT_FLAG="--ignore-unsafe-cert"; shift 1;;
             --terminal) TERMINAL_FLAG="--terminal"; shift 1;;
@@ -599,6 +602,7 @@ main() {
     echo "  - 虚假倍率: $FAKE"
     echo "  - 上传间隔: $INTERVAL ms"
     echo "  - 计费日: 每月 $BILLING_DAY 号"
+    echo "  - 自动升级: ${AUTO_UPDATE:-0} 小时"
     echo "  - 启用 TLS: ${TLS_FLAG:--}"
     echo "  - 忽略证书: ${IGNORE_CERT_FLAG:--}"
     echo "  - 启用 Terminal: ${TERMINAL_FLAG:--}"
@@ -666,6 +670,11 @@ main() {
     
     # 通用参数
     EXEC_START_CMD="$EXEC_START_CMD --fake \"${FAKE}\" --realtime-info-interval \"${INTERVAL}\" --billing-day \"${BILLING_DAY}\""
+    
+    # 自动升级参数
+    if [ -n "$AUTO_UPDATE" ] && [ "$AUTO_UPDATE" != "0" ]; then
+        EXEC_START_CMD="$EXEC_START_CMD --auto-update \"${AUTO_UPDATE}\" --update-repo \"${GITHUB_REPO}\""
+    fi
     
     if [ -n "$TLS_FLAG" ]; then
         EXEC_START_CMD="$EXEC_START_CMD $TLS_FLAG"

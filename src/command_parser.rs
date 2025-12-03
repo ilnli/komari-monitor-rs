@@ -55,6 +55,18 @@ pub struct Args {
     /// 设置计费日 (每月第几号开始统计流量，默认为1号)
     #[arg(long, default_value_t = 1)]
     pub billing_day: u32,
+
+    /// 启用自动升级 (检查间隔小时数，0为禁用)
+    #[arg(long, default_value_t = 0)]
+    pub auto_update: u64,
+
+    /// 自动升级使用的 GitHub 仓库
+    #[arg(long, default_value_t = default_repo())]
+    pub update_repo: String,
+}
+
+fn default_repo() -> String {
+    "GenshinMinecraft/komari-monitor-rs".to_string()
 }
 
 fn terminal_entry() -> String {

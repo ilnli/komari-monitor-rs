@@ -31,6 +31,7 @@ mod data_struct;
 mod get_info;
 mod rustls_config;
 mod utils;
+mod auto_update;
 
 #[tokio::main]
 async fn main() {
@@ -54,6 +55,20 @@ async fn main() {
         build_urls(&args.http_server, args.ws_server.as_ref(), &args.token).unwrap();
 
     info!("成功读取参数: {args:?}");
+
+    // 启动自动升级检查任务
+    if args.auto_update > 0 {
+        let update_repo = args.update_repo.clone();
+        let ignore_cert = args.ignore_unsafe_cert;
+        let interval_hours = args.auto_update;
+        std::thread::spawn(move || {
+            loop {
+                auto_update::check_and_upgrade(&update_repo, ignore_cert);
+                std::thread::sleep(Duration::from_secs(interval_hours * 3600));
+            }
+        });
+        info!("自动升级已启用，检查间隔: {interval_hours} 小时");
+    }
 
     loop {
         let Ok(ws_stream) = connect_ws(

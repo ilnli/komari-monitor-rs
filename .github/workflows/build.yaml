@@ -3,13 +3,127 @@ name: Cross Build
 on:
   push:
     branches:
-      - "*"
+      - "main"
   pull_request:
     branches:
       - "*"
   workflow_dispatch:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  # 获取版本号和发布信息
+  get-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+      tag_name: ${{ steps.get_version.outputs.tag_name }}
+      is_prerelease: ${{ steps.get_version.outputs.is_prerelease }}
+      release_name: ${{ steps.get_version.outputs.release_name }}
+      is_manual: ${{ steps.get_version.outputs.is_manual }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Get version and release info
+        id: get_version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # 手动触发：正式发布
+            echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+            echo "tag_name=v${VERSION}" >> $GITHUB_OUTPUT
+            echo "is_prerelease=false" >> $GITHUB_OUTPUT
+            echo "release_name=Release v${VERSION}" >> $GITHUB_OUTPUT
+            echo "is_manual=true" >> $GITHUB_OUTPUT
+            echo "Manual trigger: Release v${VERSION}"
+          else
+            # Push 触发：预发布
+            echo "version=v${VERSION}" >> $GITHUB_OUTPUT
+            echo "tag_name=v${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "is_prerelease=true" >> $GITHUB_OUTPUT
+            echo "release_name=Pre-release v${VERSION}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+            echo "is_manual=false" >> $GITHUB_OUTPUT
+            echo "Push trigger: Pre-release v${VERSION}-${SHORT_SHA}"
+          fi
+
+  # ============================================
+  # Push 触发：只编译 Linux x64 debug 版本（带调试符号）
+  # ============================================
+  linux-x64-debug:
+    name: Linux x64 Debug (Pre-release)
+    needs: get-version
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Rust Toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Build debug binary with symbols (ureq)
+        run: cargo build --features ureq-support
+      - name: Rename binary
+        run: mv target/debug/komari-monitor-rs target/debug/komari-monitor-rs-linux-x86_64-debug
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-debug
+          path: target/debug/komari-monitor-rs-linux-x86_64-debug
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            target/debug/komari-monitor-rs-linux-x86_64-debug
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
+          body: |
+            ## Pre-release (Debug Build)
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ⚠️ This is a **debug build** with symbols for testing purposes.
+            For production use, please use the stable release.
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build debug binary with symbols (nyquest)
+        run: cargo clean && cargo build --features nyquest-support
+      - name: Rename binary
+        run: mv target/debug/komari-monitor-rs target/debug/komari-monitor-rs-linux-x86_64-debug-nyquest
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-debug-nyquest
+          path: target/debug/komari-monitor-rs-linux-x86_64-debug-nyquest
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            target/debug/komari-monitor-rs-linux-x86_64-debug-nyquest
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
+          body: |
+            ## Pre-release (Debug Build)
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ⚠️ This is a **debug build** with symbols for testing purposes.
+            For production use, please use the stable release.
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================
+  # 手动触发：编译所有平台的优化版本
+  # ============================================
+
   #  android-arm-release:
   #    name: Build - ${{ matrix.platform.release_for }}
   #    strategy:
@@ -103,6 +217,8 @@ jobs:
 
   linux-all-platforms-release:
     name: Build - ${{ matrix.platform.release_for }}
+    needs: get-version
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         platform:
@@ -182,10 +298,15 @@ jobs:
         with:
           files: |
             target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
@@ -209,16 +330,23 @@ jobs:
         with:
           files: |
             target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}-nyquest
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   windows-release:
+    needs: get-version
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -237,10 +365,15 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
@@ -260,16 +393,23 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-nyquest.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   macos-amd64-release:
+    needs: get-version
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-13
     steps:
       - name: Checkout
@@ -290,10 +430,15 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-macos-amd64
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
@@ -313,16 +458,23 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-macos-amd64-nyquest
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   macos-arm64-release:
+    needs: get-version
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -345,10 +497,15 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-macos-arm64
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
@@ -368,10 +525,15 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-macos-arm64-nyquest
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: ${{ needs.get-version.outputs.tag_name }}
+          name: ${{ needs.get-version.outputs.release_name }}
           body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
+            ## Stable Release
+            
+            Version: ${{ needs.get-version.outputs.version }}
+            Commit: ${{ github.sha }}
+            
+            ✅ This is an optimized production build.
           draft: false
           prerelease: false
         env:
