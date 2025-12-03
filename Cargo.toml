@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 authors = ["GenshinMinecrat <gm@highp.ing>", "ilnli <220916405+ilnli@users.noreply.github.com>"]
 description = "Komari Monitor Agent in Rust"
-repository = "https://github.com/ilnli/ak_monitor_client_rs"
+repository = "https://github.com/ilnli/komari-monitor-rs"
 license = "WTFPL"
 
 [dependencies]

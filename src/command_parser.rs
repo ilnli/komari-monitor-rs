@@ -66,7 +66,7 @@ pub struct Args {
 }
 
 fn default_repo() -> String {
-    "GenshinMinecraft/komari-monitor-rs".to_string()
+    "ilnli/komari-monitor-rs".to_string()
 }
 
 fn terminal_entry() -> String {

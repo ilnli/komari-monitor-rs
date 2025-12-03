@@ -1,7 +1,7 @@
 # Komari-Monitor-rs
 
-![](https://hitscounter.dev/api/hit?url=https%3A%2F%2Fgithub.com%2Frsbench%2Frsbench&label=&icon=github&color=%23160d27)
-![komari-monitor-rs](https://socialify.git.ci/GenshinMinecraft/komari-monitor-rs/image?custom_description=Komari+%E7%AC%AC%E4%B8%89%E6%96%B9+Agent+%7C+%E9%AB%98%E6%80%A7%E8%83%BD&description=1&font=KoHo&forks=1&issues=1&language=1&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)
+![](https://hitscounter.dev/api/hit?url=https%3A%2F%2Fgithub.com%2Filnli%2Fkomari-monitor-rs&label=&icon=github&color=%23160d27)
+![komari-monitor-rs](https://socialify.git.ci/ilnli/komari-monitor-rs/image?custom_description=Komari+%E7%AC%AC%E4%B8%89%E6%96%B9+Agent+%7C+%E9%AB%98%E6%80%A7%E8%83%BD&description=1&font=KoHo&forks=1&issues=1&language=1&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)
 
 ## About
 
@@ -15,13 +15,13 @@ Agent
 - 交互模式
 
   ```bash
-  wget -O setup-client-rs.sh "https://ghfast.top/https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh && bash ./setup-client-rs.sh
+  wget -O setup-client-rs.sh "https://raw.githubusercontent.com/ilnli/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh && bash ./setup-client-rs.sh
   ```
 
 - 直接传入参数
 
   ```bash
-  wget -O setup-client-rs.sh "https://ghfast.top/https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh
+  wget -O setup-client-rs.sh "https://raw.githubusercontent.com/ilnli/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh
   bash setup-client-rs.sh --http-server "http://your.server:port" --ws-server "ws://your.server:port" --token "your_token"
   ```
 
@@ -55,7 +55,7 @@ Agent
 
 ## 下载
 
-在本项目的 [Release 界面](https://github.com/GenshinMinecraft/komari-monitor-rs/releases/tag/latest) 即可下载，按照架构选择即可
+在本项目的 [Release 界面](https://github.com/ilnli/komari-monitor-rs/releases/tag/latest) 即可下载，按照架构选择即可
 
 后缀有 `musl` 字样的可以在任何 Linux 系统下运行
 
@@ -112,7 +112,7 @@ Options:
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
     komari-monitor-rs = {
-      url = "github:GenshinMinecraft/komari-monitor-rs";
+      url = "github:ilnli/komari-monitor-rs";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

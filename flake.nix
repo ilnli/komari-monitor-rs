@@ -68,7 +68,7 @@
                     configuration for komari-monitor-rs, `http-server` and `token` must be specified,
                     key is the long name of the available parameters for komari-monitor-rs, except for `--help` and `--version`, and does not have a `--` prefix.
                     value is the value of the parameter, if the parameter is a flag (eg. `--tls`), then it's value is a boolean value.
-                    see <https://github.com/GenshinMinecraft/komari-monitor-rs#usage> for supported options.
+                    see <https://github.com/ilnli/komari-monitor-rs#usage> for supported options.
                   '';
                   example = literalExpression ''
                     {

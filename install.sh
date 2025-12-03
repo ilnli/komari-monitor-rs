@@ -13,7 +13,7 @@
 #
 # 使用方法:
 #   一键安装 (需自行修改参数):
-#     bash <(curl -sL https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/main/install.sh) \
+#     bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \
 #       --http-server "http://your.server:port" --ws-server "ws://your.server:port" --token "your_token"
 #
 #   交互式安装:
@@ -28,7 +28,7 @@
 
 # --- 配置 ---
 # GitHub 仓库信息 (默认值，可通过 --repo 参数覆盖)
-DEFAULT_GITHUB_REPO="GenshinMinecraft/komari-monitor-rs"
+DEFAULT_GITHUB_REPO="ilnli/komari-monitor-rs"
 # 安装路径
 INSTALL_PATH="/usr/local/bin/komari-monitor-rs"
 # 服务名称
@@ -380,7 +380,7 @@ Komari Monitor RS 安装脚本
   bash install.sh [选项]
 
 选项:
-  --repo <owner/repo>       GitHub 仓库 (默认: GenshinMinecraft/komari-monitor-rs)
+  --repo <owner/repo>       GitHub 仓库 (默认: ilnli/komari-monitor-rs)
   --http-server <地址>      主端 Http 地址 (必需)
   --ws-server <地址>        主端 WebSocket 地址 (可选，默认自动推断)
   -t, --token <token>       认证 Token (使用 --auto-discovery 时可省略)
@@ -427,16 +427,16 @@ Komari Monitor RS 安装脚本
   bash install.sh --uninstall
 
 一键安装命令 (需替换参数):
-  bash <(curl -sL https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/main/install.sh) \\
+  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
     --http-server "http://your.server:port" --token "your_token"
 
   # 使用自动发现:
-  bash <(curl -sL https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/main/install.sh) \\
+  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
     --http-server "http://your.server:port" --auto-discovery "your_ad_key"
 
   # 从 fork 仓库安装:
   bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
-    --repo "ilnli/komari-monitor-rs" --http-server "http://your.server:port" --token "your_token"
+    --repo "your-username/komari-monitor-rs" --http-server "http://your.server:port" --token "your_token"
 
 EOF
 }
