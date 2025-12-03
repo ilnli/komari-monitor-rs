@@ -289,6 +289,88 @@ upgrade() {
     exit 0
 }
 
+# 7. 自动发现函数 - 调用 API 获取 token
+auto_discover() {
+    local endpoint="$1"
+    local ad_key="$2"
+    local hostname
+    
+    # 获取主机名
+    hostname=$(hostname)
+    
+    # 构建 API URL
+    local api_url="${endpoint}/api/clients/register?name=${hostname}"
+    
+    log_info "正在进行自动发现注册..."
+    log_info "API: ${api_url}"
+    
+    local response
+    local http_code
+    
+    # 调用 API
+    if command -v curl &> /dev/null; then
+        response=$(curl -s -w "\n%{http_code}" -X POST "${api_url}" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${ad_key}" \
+            -d "{\"key\": \"${ad_key}\"}")
+    elif command -v wget &> /dev/null; then
+        # wget 不方便获取 HTTP 状态码，使用临时文件
+        local tmp_file=$(mktemp)
+        wget -q -O "${tmp_file}" --method=POST \
+            --header="Content-Type: application/json" \
+            --header="Authorization: Bearer ${ad_key}" \
+            --body-data="{\"key\": \"${ad_key}\"}" \
+            "${api_url}" 2>/dev/null
+        if [ $? -eq 0 ]; then
+            response=$(cat "${tmp_file}")
+            response="${response}\n200"
+        else
+            response="\n000"
+        fi
+        rm -f "${tmp_file}"
+    else
+        log_error "未找到 curl 或 wget，无法进行自动发现。"
+        return 1
+    fi
+    
+    # 解析响应
+    http_code=$(echo "$response" | tail -n1)
+    local body=$(echo "$response" | sed '$d')
+    
+    if [ "$http_code" != "200" ]; then
+        log_error "自动发现失败！HTTP 状态码: ${http_code}"
+        log_error "响应: ${body}"
+        return 1
+    fi
+    
+    # 解析 JSON 响应获取 token
+    # 响应格式: {"status": "success", "message": "...", "data": {"uuid": "...", "token": "..."}}
+    local status
+    local token
+    
+    # 使用 grep 和 sed 解析 JSON (兼容没有 jq 的环境)
+    status=$(echo "$body" | grep -o '"status"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/')
+    token=$(echo "$body" | grep -o '"token"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/.*"\([^"]*\)"$/\1/')
+    
+    if [ "$status" != "success" ]; then
+        log_error "自动发现失败！状态: ${status}"
+        log_error "响应: ${body}"
+        return 1
+    fi
+    
+    if [ -z "$token" ]; then
+        log_error "自动发现失败！无法从响应中获取 token。"
+        log_error "响应: ${body}"
+        return 1
+    fi
+    
+    log_info "自动发现成功！已获取 Token。"
+    
+    # 返回 token
+    echo "$token"
+    return 0
+}
+
 # 显示帮助信息
 show_help() {
     cat <<EOF
@@ -301,7 +383,8 @@ Komari Monitor RS 安装脚本
   --repo <owner/repo>       GitHub 仓库 (默认: GenshinMinecraft/komari-monitor-rs)
   --http-server <地址>      主端 Http 地址 (必需)
   --ws-server <地址>        主端 WebSocket 地址 (可选，默认自动推断)
-  -t, --token <token>       认证 Token (必需)
+  -t, --token <token>       认证 Token (使用 --auto-discovery 时可省略)
+  --auto-discovery <key>    自动发现密钥 (用于批量注册 Agent)
   -f, --fake <倍率>         虚假倍率 (默认: 1)
   --realtime-info-interval <ms>  上传间隔毫秒 (默认: 1000)
   --billing-day <日期>      计费日，每月第几号 (默认: 1)
@@ -319,6 +402,9 @@ Komari Monitor RS 安装脚本
 
   # 带参数安装
   bash install.sh --http-server "http://example.com:8080" --token "your_token"
+
+  # 使用自动发现安装 (无需 token)
+  bash install.sh --http-server "http://example.com:8080" --auto-discovery "your_ad_key"
 
   # 使用内置代理下载
   bash install.sh --http-server "http://example.com:8080" --token "your_token" --proxy
@@ -343,6 +429,10 @@ Komari Monitor RS 安装脚本
   bash <(curl -sL https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/main/install.sh) \\
     --http-server "http://your.server:port" --token "your_token"
 
+  # 使用自动发现:
+  bash <(curl -sL https://raw.githubusercontent.com/GenshinMinecraft/komari-monitor-rs/main/install.sh) \\
+    --http-server "http://your.server:port" --auto-discovery "your_ad_key"
+
   # 从 fork 仓库安装:
   bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
     --repo "ilnli/komari-monitor-rs" --http-server "http://your.server:port" --token "your_token"
@@ -357,6 +447,7 @@ main() {
     HTTP_SERVER=""
     WS_SERVER=""
     TOKEN=""
+    AUTO_DISCOVERY=""
     FAKE="1"
     INTERVAL="1000"
     BILLING_DAY="1"
@@ -378,6 +469,7 @@ main() {
             --http-server) HTTP_SERVER="$2"; shift 2;;
             --ws-server) WS_SERVER="$2"; shift 2;;
             -t|--token) TOKEN="$2"; shift 2;;
+            --auto-discovery) AUTO_DISCOVERY="$2"; shift 2;;
             -f|--fake) FAKE="$2"; shift 2;;
             --realtime-info-interval) INTERVAL="$2"; shift 2;;
             --billing-day) BILLING_DAY="$2"; shift 2;;
@@ -419,14 +511,41 @@ main() {
     echo ""
 
     # --- 交互式询问缺失的必要参数 ---
-    if [ -z "$HTTP_SERVER" ]; then
-        read -p "请输入主端 Http 地址 (例如 http://127.0.0.1:8080): " HTTP_SERVER
-    fi
-    if [ -z "$WS_SERVER" ]; then
-        read -p "请输入主端 WebSocket 地址 (例如 ws://127.0.0.1:8080，直接回车则自动从 Http 地址推断): " WS_SERVER
-    fi
-    if [ -z "$TOKEN" ]; then
-        read -p "请输入 Token: " TOKEN
+    # 检查是否使用自动发现模式
+    if [ -n "$AUTO_DISCOVERY" ] && [ -n "$HTTP_SERVER" ]; then
+        # 自动发现模式，有 HTTP_SERVER 和 AUTO_DISCOVERY，需要调用 API 获取 TOKEN
+        log_info "使用自动发现模式"
+    elif [ -n "$AUTO_DISCOVERY" ] && [ -z "$HTTP_SERVER" ]; then
+        # 提供了 AUTO_DISCOVERY 但没有 HTTP_SERVER
+        read -p "请输入主端地址 (例如 http://127.0.0.1:8080): " HTTP_SERVER
+    elif [ -z "$HTTP_SERVER" ] && [ -z "$TOKEN" ]; then
+        # 询问使用哪种模式
+        echo "请选择连接模式:"
+        echo "  1) 传统模式 (手动输入 Http 地址和 Token)"
+        echo "  2) 自动发现模式 (通过主端自动注册获取 Token)"
+        read -p "请选择 [1/2] (默认: 1): " mode_choice
+        
+        if [ "$mode_choice" = "2" ]; then
+            # 自动发现模式
+            read -p "请输入主端地址 (例如 http://127.0.0.1:8080): " HTTP_SERVER
+            read -p "请输入自动发现密钥: " AUTO_DISCOVERY
+        else
+            # 传统模式
+            read -p "请输入主端 Http 地址 (例如 http://127.0.0.1:8080): " HTTP_SERVER
+            read -p "请输入主端 WebSocket 地址 (例如 ws://127.0.0.1:8080，直接回车则自动从 Http 地址推断): " WS_SERVER
+            read -p "请输入 Token: " TOKEN
+        fi
+    else
+        # 传统模式补充缺失参数
+        if [ -z "$HTTP_SERVER" ]; then
+            read -p "请输入主端 Http 地址 (例如 http://127.0.0.1:8080): " HTTP_SERVER
+        fi
+        if [ -z "$WS_SERVER" ]; then
+            read -p "请输入主端 WebSocket 地址 (例如 ws://127.0.0.1:8080，直接回车则自动从 Http 地址推断): " WS_SERVER
+        fi
+        if [ -z "$TOKEN" ]; then
+            read -p "请输入 Token: " TOKEN
+        fi
     fi
 
     # 交互式询问 --terminal (仅当命令行未提供时)
@@ -451,16 +570,32 @@ main() {
     fi
 
     # 验证输入
-    if [ -z "$HTTP_SERVER" ] || [ -z "$TOKEN" ]; then
-        log_error "Http 地址和 Token 不能为空。"
-        exit 1
+    if [ -n "$AUTO_DISCOVERY" ]; then
+        # 自动发现模式，验证 HTTP_SERVER 和 AUTO_DISCOVERY
+        if [ -z "$HTTP_SERVER" ] || [ -z "$AUTO_DISCOVERY" ]; then
+            log_error "自动发现模式下，主端地址和自动发现密钥不能为空。"
+            exit 1
+        fi
+    else
+        # 传统模式，验证 HTTP_SERVER 和 TOKEN
+        if [ -z "$HTTP_SERVER" ] || [ -z "$TOKEN" ]; then
+            log_error "Http 地址和 Token 不能为空。"
+            exit 1
+        fi
     fi
 
     echo ""
     log_info "配置信息确认:"
-    echo "  - Http Server: $HTTP_SERVER"
-    echo "  - WS Server: ${WS_SERVER:-(自动推断)}"
-    echo "  - Token: ********"
+    if [ -n "$AUTO_DISCOVERY" ]; then
+        echo "  - 模式: 自动发现"
+        echo "  - Http Server: $HTTP_SERVER"
+        echo "  - 自动发现密钥: ********"
+    else
+        echo "  - 模式: 传统"
+        echo "  - Http Server: $HTTP_SERVER"
+        echo "  - WS Server: ${WS_SERVER:-(自动推断)}"
+        echo "  - Token: ********"
+    fi
     echo "  - 虚假倍率: $FAKE"
     echo "  - 上传间隔: $INTERVAL ms"
     echo "  - 计费日: 每月 $BILLING_DAY 号"
@@ -505,17 +640,32 @@ main() {
     chmod +x "${INSTALL_PATH}"
     log_info "程序已成功下载并安装到: ${INSTALL_PATH}"
 
+    # --- 如果是自动发现模式，调用 API 获取 token ---
+    if [ -n "$AUTO_DISCOVERY" ]; then
+        log_step "执行自动发现..."
+        AD_TOKEN=$(auto_discover "$HTTP_SERVER" "$AUTO_DISCOVERY")
+        if [ $? -ne 0 ]; then
+            log_error "自动发现失败，无法继续安装。"
+            exit 1
+        fi
+        TOKEN="$AD_TOKEN"
+        log_info "已通过自动发现获取 Token。"
+    fi
+
     # --- 创建 systemd 服务 ---
     log_step "配置 systemd 服务..."
 
-    # 构建启动命令
+    # 构建启动命令 (始终使用传统模式参数，因为 token 已获取)
     EXEC_START_CMD="${INSTALL_PATH} --http-server \"${HTTP_SERVER}\""
     
     if [ -n "$WS_SERVER" ]; then
         EXEC_START_CMD="$EXEC_START_CMD --ws-server \"${WS_SERVER}\""
     fi
     
-    EXEC_START_CMD="$EXEC_START_CMD --token \"${TOKEN}\" --fake \"${FAKE}\" --realtime-info-interval \"${INTERVAL}\" --billing-day \"${BILLING_DAY}\""
+    EXEC_START_CMD="$EXEC_START_CMD --token \"${TOKEN}\""
+    
+    # 通用参数
+    EXEC_START_CMD="$EXEC_START_CMD --fake \"${FAKE}\" --realtime-info-interval \"${INTERVAL}\" --billing-day \"${BILLING_DAY}\""
     
     if [ -n "$TLS_FLAG" ]; then
         EXEC_START_CMD="$EXEC_START_CMD $TLS_FLAG"
