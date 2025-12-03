@@ -106,10 +106,11 @@ async fn main() {
 
         // 初始化流量统计
         let mut traffic_stats = TrafficStats::load_or_create(args.billing_day);
-        
+
         // 设置初始的系统总流量（用于计算增量）
         if traffic_stats.last_total_up == 0 && traffic_stats.last_total_down == 0 {
-            let (total_up, total_down) = crate::get_info::network::get_system_total_traffic(&networks);
+            let (total_up, total_down) =
+                crate::get_info::network::get_system_total_traffic(&networks);
             traffic_stats.last_total_up = total_up;
             traffic_stats.last_total_down = total_down;
             traffic_stats.save();
@@ -127,7 +128,14 @@ async fn main() {
             );
             networks.refresh(true);
             disks.refresh_specifics(true, DiskRefreshKind::nothing().with_storage());
-            let real_time = RealTimeInfo::build(&sysinfo_sys, &networks, &disks, &mut traffic_stats, args.fake);
+            let real_time = RealTimeInfo::build(
+                &sysinfo_sys,
+                &networks,
+                &disks,
+                &mut traffic_stats,
+                args.realtime_info_interval,
+                args.fake,
+            );
 
             // 每 60 次上报保存一次流量统计（默认间隔下约 1 分钟）
             save_counter += 1;

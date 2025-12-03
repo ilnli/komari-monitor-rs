@@ -102,14 +102,15 @@ pub fn filter_disks(disks: &Disks) -> Vec<&sysinfo::Disk> {
         "/nix/store",
     ];
 
-    let filtered_special_mount_point: Vec<&sysinfo::Disk> =
-        filtered_fs
-            .into_iter()
-            .filter(|disk| {
-                let mount_point = disk.mount_point().to_string_lossy();
-                !exclude_keywords.iter().any(|keyword| mount_point.contains(keyword))
-            })
-            .collect();
+    let filtered_special_mount_point: Vec<&sysinfo::Disk> = filtered_fs
+        .into_iter()
+        .filter(|disk| {
+            let mount_point = disk.mount_point().to_string_lossy();
+            !exclude_keywords
+                .iter()
+                .any(|keyword| mount_point.contains(keyword))
+        })
+        .collect();
 
     filtered_special_mount_point
 }

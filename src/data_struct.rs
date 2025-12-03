@@ -4,8 +4,8 @@ use crate::get_info::cpu::{arch, cpu_info_without_usage, realtime_cpu};
 use crate::get_info::ip::ip;
 use crate::get_info::load::realtime_load;
 use crate::get_info::mem::{mem_info_without_usage, realtime_disk, realtime_mem, realtime_swap};
-use crate::get_info::network::{realtime_connections, realtime_network};
 use crate::get_info::network::traffic_stats::TrafficStats;
+use crate::get_info::network::{realtime_connections, realtime_network};
 use crate::get_info::os::os;
 use crate::get_info::{realtime_process, realtime_uptime};
 use log::{debug, error, info};
@@ -178,6 +178,7 @@ impl RealTimeInfo {
         network: &Networks,
         disk: &Disks,
         traffic_stats: &mut TrafficStats,
+        duration_ms: u64,
         fake: f64,
     ) -> Self {
         let cpu = realtime_cpu(sysinfo_sys);
@@ -196,7 +197,7 @@ impl RealTimeInfo {
         let fake_load5 = load.load5 * fake;
         let fake_load15 = load.load15 * fake;
 
-        let network_info = realtime_network(network, traffic_stats);
+        let network_info = realtime_network(network, traffic_stats, duration_ms);
         let fake_network_up = (network_info.up as f64 * fake) as u64;
         let fake_network_down = (network_info.down as f64 * fake) as u64;
         let fake_network_total_up = (network_info.total_up as f64 * fake) as u64;

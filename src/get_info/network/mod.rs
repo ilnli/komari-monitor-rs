@@ -5,8 +5,6 @@ use sysinfo::Networks;
 mod netlink;
 pub mod traffic_stats;
 
-pub static mut DURATION: f64 = 0.0;
-
 /// 获取系统总流量（用于计费周期统计）
 pub fn get_system_total_traffic(network: &Networks) -> (u64, u64) {
     let mut total_up = 0;
@@ -41,7 +39,11 @@ fn is_virtual_interface(name: &str) -> bool {
         || name.contains("fwpr")
 }
 
-pub fn realtime_network(network: &Networks, traffic_stats: &mut traffic_stats::TrafficStats) -> Network {
+pub fn realtime_network(
+    network: &Networks,
+    traffic_stats: &mut traffic_stats::TrafficStats,
+    duration_ms: u64,
+) -> Network {
     let mut total_up = 0;
     let mut total_down = 0;
     let mut up = 0;
@@ -60,16 +62,15 @@ pub fn realtime_network(network: &Networks, traffic_stats: &mut traffic_stats::T
     // 更新计费周期的累计流量
     let (cycle_up, cycle_down) = traffic_stats.update(total_up, total_down);
 
-    unsafe {
-        let network_info = Network {
-            up: (up as f64 / (DURATION / 1000.0)) as u64,
-            down: (down as f64 / (DURATION / 1000.0)) as u64,
-            total_up: cycle_up,
-            total_down: cycle_down,
-        };
-        trace!("REALTIME NETWORK 获取成功: {network_info:?}");
-        network_info
-    }
+    let duration_secs = duration_ms as f64 / 1000.0;
+    let network_info = Network {
+        up: (up as f64 / duration_secs) as u64,
+        down: (down as f64 / duration_secs) as u64,
+        total_up: cycle_up,
+        total_down: cycle_down,
+    };
+    trace!("REALTIME NETWORK 获取成功: {network_info:?}");
+    network_info
 }
 
 #[cfg(target_os = "linux")]

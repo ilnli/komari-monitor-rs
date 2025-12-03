@@ -39,18 +39,26 @@ impl TrafficStats {
     /// 从文件加载统计数据，如果文件不存在则创建新的
     pub fn load_or_create(billing_day: u32) -> Self {
         let path = Self::get_stats_path();
-        
+
         if let Some(stats) = Self::load_from_file(&path) {
             // 检查 billing_day 是否变化，如果变化则重置
             if stats.billing_day != billing_day {
-                warn!("计费日已从 {} 变更为 {}，将重置流量统计", stats.billing_day, billing_day);
+                warn!(
+                    "计费日已从 {} 变更为 {}，将重置流量统计",
+                    stats.billing_day, billing_day
+                );
                 let new_stats = Self::new_cycle(billing_day);
                 new_stats.save();
                 return new_stats;
             }
-            info!("已加载流量统计: 周期 {}-{:02}-{:02}, 上行: {}, 下行: {}", 
-                  stats.cycle_year, stats.cycle_month, stats.billing_day,
-                  format_bytes(stats.cycle_up), format_bytes(stats.cycle_down));
+            info!(
+                "已加载流量统计: 周期 {}-{:02}-{:02}, 上行: {}, 下行: {}",
+                stats.cycle_year,
+                stats.cycle_month,
+                stats.billing_day,
+                format_bytes(stats.cycle_up),
+                format_bytes(stats.cycle_down)
+            );
             stats
         } else {
             info!("未找到流量统计文件，创建新的统计周期");
@@ -64,7 +72,7 @@ impl TrafficStats {
     fn new_cycle(billing_day: u32) -> Self {
         let (year, month, day) = current_date();
         let (cycle_year, cycle_month) = calculate_cycle_start(year, month, day, billing_day);
-        
+
         Self {
             cycle_year,
             cycle_month,
@@ -85,7 +93,7 @@ impl TrafficStats {
         // 格式: cycle_year,cycle_month,billing_day,cycle_up,cycle_down,last_total_up,last_total_down
         let line = lines.next()?.ok()?;
         let parts: Vec<&str> = line.trim().split(',').collect();
-        
+
         if parts.len() != 7 {
             error!("流量统计文件格式错误");
             return None;
@@ -105,13 +113,14 @@ impl TrafficStats {
     /// 保存到文件
     pub fn save(&self) {
         let path = Self::get_stats_path();
-        
+
         // 确保目录存在
         if let Some(parent) = Path::new(&path).parent()
-            && let Err(e) = fs::create_dir_all(parent) {
-                error!("无法创建统计目录: {e}");
-                return;
-            }
+            && let Err(e) = fs::create_dir_all(parent)
+        {
+            error!("无法创建统计目录: {e}");
+            return;
+        }
 
         let content = format!(
             "{},{},{},{},{},{},{}",
@@ -140,7 +149,7 @@ impl TrafficStats {
     pub fn update(&mut self, current_total_up: u64, current_total_down: u64) -> (u64, u64) {
         // 检查是否需要重置周期
         let (year, month, day) = current_date();
-        let (expected_cycle_year, expected_cycle_month) = 
+        let (expected_cycle_year, expected_cycle_month) =
             calculate_cycle_start(year, month, day, self.billing_day);
 
         if expected_cycle_year != self.cycle_year || expected_cycle_month != self.cycle_month {
@@ -164,14 +173,20 @@ impl TrafficStats {
             current_total_up - self.last_total_up
         } else {
             // 计数器可能溢出或系统重启，使用当前值作为增量
-            debug!("检测到上行流量计数器重置，当前: {}, 上次: {}", current_total_up, self.last_total_up);
+            debug!(
+                "检测到上行流量计数器重置，当前: {}, 上次: {}",
+                current_total_up, self.last_total_up
+            );
             current_total_up
         };
 
         let delta_down = if current_total_down >= self.last_total_down {
             current_total_down - self.last_total_down
         } else {
-            debug!("检测到下行流量计数器重置，当前: {}, 上次: {}", current_total_down, self.last_total_down);
+            debug!(
+                "检测到下行流量计数器重置，当前: {}, 上次: {}",
+                current_total_down, self.last_total_down
+            );
             current_total_down
         };
 
@@ -195,21 +210,21 @@ impl TrafficStats {
 #[allow(clippy::cast_possible_wrap)]
 fn current_date() -> (i32, u32, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
-    
+
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64;
-    
+
     // 简单的日期计算（考虑时区偏移，这里使用 UTC+8）
     #[cfg(not(test))]
     let secs = secs + 8 * 3600; // UTC+8
-    
+
     let days = (secs / 86400) as i32;
-    
+
     // 从 1970-01-01 计算日期
     let (year, month, day) = days_to_ymd(days + 719_468); // 719468 是从公元0年到1970年的天数
-    
+
     (year, month, day)
 }
 
@@ -225,7 +240,7 @@ fn days_to_ymd(days: i32) -> (i32, u32, u32) {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
-    
+
     (y, m, d)
 }
 
@@ -273,12 +288,12 @@ mod tests {
         // 计费日为1号
         assert_eq!(calculate_cycle_start(2025, 12, 3, 1), (2025, 12));
         assert_eq!(calculate_cycle_start(2025, 12, 1, 1), (2025, 12));
-        
+
         // 计费日为15号
         assert_eq!(calculate_cycle_start(2025, 12, 3, 15), (2025, 11));
         assert_eq!(calculate_cycle_start(2025, 12, 15, 15), (2025, 12));
         assert_eq!(calculate_cycle_start(2025, 12, 20, 15), (2025, 12));
-        
+
         // 跨年
         assert_eq!(calculate_cycle_start(2025, 1, 3, 15), (2024, 12));
     }
