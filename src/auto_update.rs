@@ -146,10 +146,13 @@ fn http_get(url: &str, _ignore_cert: bool) -> Result<String, String> {
 
 #[cfg(feature = "nyquest-support")]
 fn http_get(url: &str, _ignore_cert: bool) -> Result<String, String> {
-    let client = nyquest::blocking::Client::builder()
-        .build()
+    use nyquest::Request;
+    let client = nyquest::ClientBuilder::default()
+        .user_agent("komari-monitor-rs")
+        .build_blocking()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    let request = Request::get(url.to_string());
+    let resp = client.request(request).map_err(|e| e.to_string())?;
     resp.text().map_err(|e| e.to_string())
 }
 
@@ -180,10 +183,13 @@ fn download_file(
     path: &std::path::Path,
     _ignore_cert: bool,
 ) -> Result<(), String> {
-    let client = nyquest::blocking::Client::builder()
-        .build()
+    use nyquest::Request;
+    let client = nyquest::ClientBuilder::default()
+        .user_agent("komari-monitor-rs")
+        .build_blocking()
         .map_err(|e| e.to_string())?;
-    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    let request = Request::get(url.to_string());
+    let resp = client.request(request).map_err(|e| e.to_string())?;
     let bytes = resp.bytes().map_err(|e| e.to_string())?;
     fs::write(path, bytes).map_err(|e| e.to_string())
 }
