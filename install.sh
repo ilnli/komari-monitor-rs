@@ -1,41 +1,16 @@
 #!/bin/bash
-
-#================================================================================
-# Komari Monitor RS 安装/卸载脚本
 #
-# 功能:
-#   - 检查 Root 权限
-#   - 自动安装依赖 (wget/curl)
-#   - 自动检测系统架构并下载对应程序
-#   - 通过命令行参数或交互式提问配置程序
-#   - 创建并启用 systemd 服务实现后台保活和开机自启
-#   - 支持卸载功能
+# Komari Monitor RS 安装/管理脚本
+# https://github.com/ilnli/komari-monitor-rs
 #
-# 使用方法:
-#   一键安装 (需自行修改参数):
-#     bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \
-#       --http-server "http://your.server:port" --ws-server "ws://your.server:port" --token "your_token"
-#
-#   交互式安装:
-#     bash install.sh
-#
-#   带参数安装:
-#     bash install.sh --http-server "http://your.server:port" --ws-server "ws://your.server:port" --token "your_token" [--terminal] [--proxy]
-#
-#   卸载:
-#     bash install.sh --uninstall
-#================================================================================
 
 # --- 配置 ---
-# GitHub 仓库信息 (默认值，可通过 --repo 参数覆盖)
 DEFAULT_GITHUB_REPO="ilnli/komari-monitor-rs"
-# 安装路径
 INSTALL_PATH="/usr/local/bin/komari-monitor-rs"
-# 服务名称
+CONFIG_DIR="/etc/komari-monitor-rs"
+CONFIG_PATH="${CONFIG_DIR}/config"
 SERVICE_NAME="komari-agent-rs"
-# systemd 服务文件路径
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-# 流量统计数据目录
 DATA_DIR="/var/lib/komari-monitor"
 
 # --- 颜色定义 ---
@@ -64,7 +39,176 @@ log_step() {
 
 # --- 脚本核心函数 ---
 
-# 1. 检查是否以 Root 用户运行
+# 加载现有配置
+load_config() {
+    if [ ! -f "${CONFIG_PATH}" ]; then
+        return 1
+    fi
+
+    HTTP_SERVER=$(grep -E '^\s*http_server\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*http_server\s*=\s*"?([^"#]+)"?.*$/\1/')
+    WS_SERVER=$(grep -E '^\s*ws_server\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*ws_server\s*=\s*"?([^"#]+)"?.*$/\1/')
+    TOKEN=$(grep -E '^\s*token\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*token\s*=\s*"?([^"#]+)"?.*$/\1/')
+    IP_PROVIDER=$(grep -E '^\s*ip_provider\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*ip_provider\s*=\s*"?([^"#]+)"?.*$/\1/')
+    TERMINAL_ENABLED=$(grep -E '^\s*terminal\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*terminal\s*=\s*(true|false).*$/\1/')
+    TLS_ENABLED=$(grep -E '^\s*tls\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*tls\s*=\s*(true|false).*$/\1/')
+    IGNORE_CERT_ENABLED=$(grep -E '^\s*ignore_unsafe_cert\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*ignore_unsafe_cert\s*=\s*(true|false).*$/\1/')
+    FAKE=$(grep -E '^\s*fake\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*fake\s*=\s*([0-9.]+).*$/\1/')
+    INTERVAL=$(grep -E '^\s*realtime_info_interval\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*realtime_info_interval\s*=\s*([0-9]+).*$/\1/')
+    BILLING_DAY=$(grep -E '^\s*billing_day\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*billing_day\s*=\s*([0-9]+).*$/\1/')
+    LOG_LEVEL=$(grep -E '^\s*log_level\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*log_level\s*=\s*"?([^"#]+)"?.*$/\1/')
+    AUTO_UPDATE=$(grep -E '^\s*auto_update\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*auto_update\s*=\s*([0-9]+).*$/\1/')
+    GITHUB_REPO=$(grep -E '^\s*update_repo\s*=' "${CONFIG_PATH}" | sed -E 's/^\s*update_repo\s*=\s*"?([^"#]+)"?.*$/\1/')
+
+    # 设置默认值
+    : "${IP_PROVIDER:=ipinfo}"
+    : "${TERMINAL_ENABLED:=false}"
+    : "${TLS_ENABLED:=false}"
+    : "${IGNORE_CERT_ENABLED:=false}"
+    : "${FAKE:=1}"
+    : "${INTERVAL:=1000}"
+    : "${BILLING_DAY:=1}"
+    : "${LOG_LEVEL:=info}"
+    : "${AUTO_UPDATE:=0}"
+    : "${GITHUB_REPO:=${DEFAULT_GITHUB_REPO}}"
+}
+
+# 保存配置到文件
+save_config() {
+    mkdir -p "${CONFIG_DIR}"
+    cat > "${CONFIG_PATH}" <<EOF
+# Komari Monitor RS 配置文件
+# 由安装/管理脚本生成
+
+# 主端地址 (必需)
+http_server = "${HTTP_SERVER}"
+EOF
+
+    if [ -n "${WS_SERVER}" ]; then
+        echo "ws_server = \"${WS_SERVER}\"" >> ${CONFIG_PATH}
+    fi
+
+    cat >> ${CONFIG_PATH} <<EOF
+token = "${TOKEN}"
+
+# IP 提供商 (ipinfo / cloudflare)
+ip_provider = "${IP_PROVIDER}"
+
+# 功能开关
+terminal = ${TERMINAL_ENABLED}
+tls = ${TLS_ENABLED}
+ignore_unsafe_cert = ${IGNORE_CERT_ENABLED}
+
+# 性能设置
+fake = ${FAKE}
+realtime_info_interval = ${INTERVAL}
+billing_day = ${BILLING_DAY}
+
+# 日志等级 (error / warn / info / debug / trace)
+log_level = "${LOG_LEVEL}"
+
+# 自动升级 (0 = 禁用，其他数字为检查间隔小时数)
+auto_update = ${AUTO_UPDATE}
+update_repo = "${GITHUB_REPO}"
+EOF
+
+    chmod 600 "${CONFIG_PATH}"
+}
+
+# 交互式编辑配置
+manage_edit_config() {
+    if ! load_config; then
+        log_warn "未找到配置文件: ${CONFIG_PATH}"
+        read -p "是否创建新的配置文件? (y/N): " create_cfg
+        create_cfg=$(echo "$create_cfg" | tr '[:upper:]' '[:lower:]')
+        if [[ "$create_cfg" == "y" || "$create_cfg" == "yes" ]]; then
+            read -p "请输入主端 Http 地址: " HTTP_SERVER
+            read -p "请输入 Token: " TOKEN
+            WS_SERVER=""
+            IP_PROVIDER="ipinfo"
+            TERMINAL_ENABLED="false"
+            TLS_ENABLED="false"
+            IGNORE_CERT_ENABLED="false"
+            FAKE="1"
+            INTERVAL="1000"
+            BILLING_DAY="1"
+            LOG_LEVEL="info"
+            AUTO_UPDATE="0"
+            GITHUB_REPO="${DEFAULT_GITHUB_REPO}"
+        else
+            return
+        fi
+    fi
+
+    while true; do
+        echo ""
+        echo "当前配置:"
+        echo " 1) http_server            = ${HTTP_SERVER}"
+        echo " 2) ws_server              = ${WS_SERVER:-(自动推断)}"
+        echo " 3) token                  = ********"
+        echo " 4) ip_provider            = ${IP_PROVIDER}"
+        echo " 5) terminal               = ${TERMINAL_ENABLED}"
+        echo " 6) tls                    = ${TLS_ENABLED}"
+        echo " 7) ignore_unsafe_cert     = ${IGNORE_CERT_ENABLED}"
+        echo " 8) fake                   = ${FAKE}"
+        echo " 9) realtime_info_interval = ${INTERVAL}"
+        echo "10) billing_day            = ${BILLING_DAY}"
+        echo "11) log_level              = ${LOG_LEVEL}"
+        echo "12) auto_update            = ${AUTO_UPDATE}"
+        echo "13) update_repo            = ${GITHUB_REPO}"
+        echo " s) 保存并返回   c) 取消并返回"
+        read -p "请选择要修改的项 [1-13/s/c]: " choice
+        case "$choice" in
+            1) read -p "http_server: " HTTP_SERVER ;;
+            2) read -p "ws_server (留空自动推断): " WS_SERVER ;;
+            3) read -p "token: " TOKEN ;;
+            4) read -p "ip_provider (ipinfo/cloudflare): " IP_PROVIDER ;;
+            5) read -p "terminal (true/false): " TERMINAL_ENABLED ;;
+            6) read -p "tls (true/false): " TLS_ENABLED ;;
+            7) read -p "ignore_unsafe_cert (true/false): " IGNORE_CERT_ENABLED ;;
+            8) read -p "fake (整数): " FAKE ;;
+            9) read -p "realtime_info_interval (ms): " INTERVAL ;;
+           10) read -p "billing_day (1-31): " BILLING_DAY ;;
+           11) read -p "log_level (error/warn/info/debug/trace): " LOG_LEVEL ;;
+           12) read -p "auto_update (小时, 0=禁用): " AUTO_UPDATE ;;
+           13) read -p "update_repo (owner/repo): " GITHUB_REPO ;;
+            s|S)
+                save_config
+                log_info "配置已保存: ${CONFIG_PATH}"
+                return
+                ;;
+            c|C)
+                log_warn "已取消修改。"
+                return
+                ;;
+            *) log_warn "无效选择" ;;
+        esac
+    done
+}
+
+# 管理菜单
+manage_menu() {
+    log_step "进入管理模式"
+    while true; do
+        echo ""
+        echo "管理操作:"
+        echo " 1) 编辑配置"
+        echo " 2) 重启服务"
+        echo " 3) 查看服务状态"
+        echo " 4) 实时查看日志"
+        echo " 5) 退出"
+        read -p "请选择 [1-5]: " m
+        case "$m" in
+            1) manage_edit_config ;;
+            2) systemctl restart ${SERVICE_NAME} && log_info "服务已重启" ;;
+            3) systemctl status ${SERVICE_NAME} ;;
+            4) journalctl -u ${SERVICE_NAME} -f ;;
+            5) return ;;
+            *) log_warn "无效选择" ;;
+        esac
+    done
+}
+
+# 检查是否以 Root 用户运行
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
         log_error "此脚本需要 root 权限。请使用 'sudo bash install.sh' 或以 root 用户运行。"
@@ -72,7 +216,7 @@ check_root() {
     fi
 }
 
-# 2. 安装必要的依赖 (wget 或 curl)
+# 安装必要的依赖
 install_dependencies() {
     if command -v wget &> /dev/null || command -v curl &> /dev/null; then
         log_info "下载工具已就绪。"
@@ -102,7 +246,7 @@ install_dependencies() {
     log_info "下载工具安装成功。"
 }
 
-# 3. 下载文件 (优先使用 curl，其次 wget)
+# 下载文件
 download_file() {
     local url="$1"
     local output="$2"
@@ -117,7 +261,7 @@ download_file() {
     fi
 }
 
-# 4. 检测系统架构
+# 检测系统架构
 get_arch() {
     local arch
     arch=$(uname -m)
@@ -145,7 +289,7 @@ get_arch() {
     esac
 }
 
-# 5. 卸载函数
+# 卸载
 uninstall() {
     log_step "开始卸载 Komari Monitor RS..."
     
@@ -173,6 +317,12 @@ uninstall() {
         rm -f "${INSTALL_PATH}"
     fi
     
+    # 删除配置文件
+    if [ -f "${CONFIG_PATH}" ]; then
+        log_info "正在删除配置文件..."
+        rm -f "${CONFIG_PATH}"
+    fi
+    
     # 询问是否删除数据目录
     if [ -d "${DATA_DIR}" ]; then
         read -p "是否删除流量统计数据? (y/N): " delete_data
@@ -189,7 +339,7 @@ uninstall() {
     exit 0
 }
 
-# 6. 升级函数
+# 升级
 upgrade() {
     log_step "开始升级 Komari Monitor RS..."
     
@@ -289,7 +439,7 @@ upgrade() {
     exit 0
 }
 
-# 7. 自动发现函数 - 调用 API 获取 token
+# 自动发现
 auto_discover() {
     local endpoint="$1"
     local ad_key="$2"
@@ -375,69 +525,34 @@ auto_discover() {
 show_help() {
     cat <<EOF
 Komari Monitor RS 安装脚本
+https://github.com/ilnli/komari-monitor-rs
 
-用法:
-  bash install.sh [选项]
+用法: bash install.sh [选项]
 
-选项:
-  --repo <owner/repo>       GitHub 仓库 (默认: ilnli/komari-monitor-rs)
-  --http-server <地址>      主端 Http 地址 (必需)
-  --ws-server <地址>        主端 WebSocket 地址 (可选，默认自动推断)
-  -t, --token <token>       认证 Token (使用 --auto-discovery 时可省略)
-  --auto-discovery <key>    自动发现密钥 (用于批量注册 Agent)
-  -f, --fake <倍率>         虚假倍率 (默认: 1)
-  --realtime-info-interval <ms>  上传间隔毫秒 (默认: 1000)
-  --billing-day <日期>      计费日，每月第几号 (默认: 1)
-  --auto-update <小时>      自动升级检查间隔 (默认: 0，禁用)
+安装选项:
+  --http-server <地址>      主端 Http 地址
+  -t, --token <token>       认证 Token
+  --ws-server <地址>        WebSocket 地址 (可选，自动推断)
+  --auto-discovery <key>    自动发现密钥
+  --terminal                启用 Web Terminal
   --tls                     启用 TLS
-  --ignore-unsafe-cert      忽略不安全的证书
-  --terminal                启用 Web Terminal 功能
-  --proxy [地址]            使用代理下载，可指定代理地址 (默认: https://ghfast.top)
-  --upgrade, --update       升级程序到最新版本
+  --ignore-unsafe-cert      忽略证书验证
+  --billing-day <1-31>      计费日 (默认: 1)
+  --proxy [地址]            使用代理下载
+
+管理选项:
+  --manage                  管理模式 (编辑配置/管理服务)
+  --upgrade, --update       升级程序
   --uninstall, --remove     卸载程序
-  -h, --help                显示此帮助信息
 
 示例:
-  # 一键安装 (交互式)
-  bash install.sh
+  bash install.sh                                           # 交互式安装
+  bash install.sh --http-server "http://x:8080" -t "token"  # 带参数安装
+  bash install.sh --manage                                  # 管理配置
+  bash install.sh --upgrade                                 # 升级程序
 
-  # 带参数安装
-  bash install.sh --http-server "http://example.com:8080" --token "your_token"
-
-  # 使用自动发现安装 (无需 token)
-  bash install.sh --http-server "http://example.com:8080" --auto-discovery "your_ad_key"
-
-  # 使用内置代理下载
-  bash install.sh --http-server "http://example.com:8080" --token "your_token" --proxy
-
-  # 使用自定义代理下载
-  bash install.sh --http-server "http://example.com:8080" --token "your_token" --proxy "https://my-proxy.com"
-
-  # 升级程序
-  bash install.sh --upgrade
-
-  # 使用代理升级
-  bash install.sh --upgrade --proxy
-
-  # 从自定义仓库安装/升级
-  bash install.sh --repo "ilnli/komari-monitor-rs" --http-server "http://example.com:8080" --token "your_token"
-  bash install.sh --upgrade --repo "ilnli/komari-monitor-rs"
-
-  # 卸载
-  bash install.sh --uninstall
-
-一键安装命令 (需替换参数):
-  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
-    --http-server "http://your.server:port" --token "your_token"
-
-  # 使用自动发现:
-  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
-    --http-server "http://your.server:port" --auto-discovery "your_ad_key"
-
-  # 从 fork 仓库安装:
-  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \\
-    --repo "your-username/komari-monitor-rs" --http-server "http://your.server:port" --token "your_token"
-
+一键安装:
+  bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh)
 EOF
 }
 
@@ -453,13 +568,16 @@ main() {
     INTERVAL="1000"
     BILLING_DAY="1"
     AUTO_UPDATE="0"
-    TLS_FLAG=""
-    IGNORE_CERT_FLAG=""
-    TERMINAL_FLAG=""
+    IP_PROVIDER="ipinfo"
+    LOG_LEVEL="info"
+    TLS_ENABLED="false"
+    IGNORE_CERT_ENABLED="false"
+    TERMINAL_ENABLED="false"
     USE_PROXY=""
     PROXY_URL=""
     DO_UNINSTALL=""
     DO_UPGRADE=""
+    DO_MANAGE=""
 
     # 默认代理地址
     DEFAULT_PROXY="https://ghfast.top"
@@ -476,9 +594,9 @@ main() {
             --realtime-info-interval) INTERVAL="$2"; shift 2;;
             --billing-day) BILLING_DAY="$2"; shift 2;;
             --auto-update) AUTO_UPDATE="$2"; shift 2;;
-            --tls) TLS_FLAG="--tls"; shift 1;;
-            --ignore-unsafe-cert) IGNORE_CERT_FLAG="--ignore-unsafe-cert"; shift 1;;
-            --terminal) TERMINAL_FLAG="--terminal"; shift 1;;
+            --tls) TLS_ENABLED="true"; shift 1;;
+            --ignore-unsafe-cert) IGNORE_CERT_ENABLED="true"; shift 1;;
+            --terminal) TERMINAL_ENABLED="true"; shift 1;;
             --proxy)
                 USE_PROXY="1"
                 # 检查下一个参数是否是代理地址（不以 -- 开头）
@@ -491,6 +609,7 @@ main() {
                 ;;
             --upgrade|--update) DO_UPGRADE="1"; shift 1;;
             --uninstall|--remove) DO_UNINSTALL="1"; shift 1;;
+            --manage) DO_MANAGE="1"; shift 1;;
             -h|--help) show_help; exit 0;;
             *) log_warn "未知的参数: $1"; shift 1;;
         esac
@@ -508,6 +627,12 @@ main() {
     if [ -n "$DO_UPGRADE" ]; then
         install_dependencies
         upgrade
+    fi
+
+    # 如果是管理模式
+    if [ -n "$DO_MANAGE" ]; then
+        manage_menu
+        exit 0
     fi
 
     log_info "Komari Monitor RS 安装程序已启动。"
@@ -552,11 +677,11 @@ main() {
     fi
 
     # 交互式询问 --terminal (仅当命令行未提供时)
-    if [ -z "$TERMINAL_FLAG" ]; then
+    if [ "$TERMINAL_ENABLED" != "true" ]; then
         read -p "是否启用 Web Terminal 功能? (y/N): " enable_terminal
         enable_terminal_lower=$(echo "$enable_terminal" | tr '[:upper:]' '[:lower:]')
         if [[ "$enable_terminal_lower" == "y" || "$enable_terminal_lower" == "yes" ]]; then
-            TERMINAL_FLAG="--terminal"
+            TERMINAL_ENABLED="true"
             log_info "Web Terminal 功能已启用。"
         fi
     fi
@@ -603,9 +728,9 @@ main() {
     echo "  - 上传间隔: $INTERVAL ms"
     echo "  - 计费日: 每月 $BILLING_DAY 号"
     echo "  - 自动升级: ${AUTO_UPDATE:-0} 小时"
-    echo "  - 启用 TLS: ${TLS_FLAG:--}"
-    echo "  - 忽略证书: ${IGNORE_CERT_FLAG:--}"
-    echo "  - 启用 Terminal: ${TERMINAL_FLAG:--}"
+    echo "  - 启用 TLS: ${TLS_ENABLED}"
+    echo "  - 忽略证书: ${IGNORE_CERT_ENABLED}"
+    echo "  - 启用 Terminal: ${TERMINAL_ENABLED}"
     echo "  - 使用代理: ${USE_PROXY:--}"
     echo "  - 仓库: ${GITHUB_REPO}"
     echo ""
@@ -656,38 +781,53 @@ main() {
         log_info "已通过自动发现获取 Token。"
     fi
 
-    # --- 创建 systemd 服务 ---
+    # 创建配置文件
+    log_step "生成配置文件..."
+    mkdir -p "${CONFIG_DIR}"
+
+    cat > "${CONFIG_PATH}" <<EOF
+# Komari Monitor RS 配置文件
+# 由安装脚本自动生成
+
+# 主端地址 (必需)
+http_server = "${HTTP_SERVER}"
+EOF
+
+    if [ -n "$WS_SERVER" ]; then
+        echo "ws_server = \"${WS_SERVER}\"" >> "${CONFIG_PATH}"
+    fi
+
+    cat >> "${CONFIG_PATH}" <<EOF
+token = "${TOKEN}"
+
+# IP 提供商 (ipinfo / cloudflare)
+ip_provider = "${IP_PROVIDER}"
+
+# 功能开关
+terminal = ${TERMINAL_ENABLED}
+tls = ${TLS_ENABLED}
+ignore_unsafe_cert = ${IGNORE_CERT_ENABLED}
+
+# 性能设置
+fake = ${FAKE}
+realtime_info_interval = ${INTERVAL}
+billing_day = ${BILLING_DAY}
+
+# 日志等级 (error / warn / info / debug / trace)
+log_level = "${LOG_LEVEL}"
+
+# 自动升级 (0 = 禁用，其他数字为检查间隔小时数)
+auto_update = ${AUTO_UPDATE}
+update_repo = "${GITHUB_REPO}"
+EOF
+
+    chmod 600 "${CONFIG_PATH}"
+    log_info "配置文件已创建: ${CONFIG_PATH}"
+
+    # 创建 systemd 服务
     log_step "配置 systemd 服务..."
 
-    # 构建启动命令 (始终使用传统模式参数，因为 token 已获取)
-    EXEC_START_CMD="${INSTALL_PATH} --http-server \"${HTTP_SERVER}\""
-    
-    if [ -n "$WS_SERVER" ]; then
-        EXEC_START_CMD="$EXEC_START_CMD --ws-server \"${WS_SERVER}\""
-    fi
-    
-    EXEC_START_CMD="$EXEC_START_CMD --token \"${TOKEN}\""
-    
-    # 通用参数
-    EXEC_START_CMD="$EXEC_START_CMD --fake \"${FAKE}\" --realtime-info-interval \"${INTERVAL}\" --billing-day \"${BILLING_DAY}\""
-    
-    # 自动升级参数
-    if [ -n "$AUTO_UPDATE" ] && [ "$AUTO_UPDATE" != "0" ]; then
-        EXEC_START_CMD="$EXEC_START_CMD --auto-update \"${AUTO_UPDATE}\" --update-repo \"${GITHUB_REPO}\""
-    fi
-    
-    if [ -n "$TLS_FLAG" ]; then
-        EXEC_START_CMD="$EXEC_START_CMD $TLS_FLAG"
-    fi
-    if [ -n "$IGNORE_CERT_FLAG" ]; then
-        EXEC_START_CMD="$EXEC_START_CMD $IGNORE_CERT_FLAG"
-    fi
-    if [ -n "$TERMINAL_FLAG" ]; then
-        EXEC_START_CMD="$EXEC_START_CMD $TERMINAL_FLAG"
-    fi
-
-    # 创建服务文件
-    cat > ${SERVICE_FILE} <<EOF
+    cat > "${SERVICE_FILE}" <<EOF
 [Unit]
 Description=Komari Monitor RS Service
 After=network.target
@@ -695,7 +835,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
-ExecStart=${EXEC_START_CMD}
+ExecStart=${INSTALL_PATH} --config ${CONFIG_PATH}
 Restart=always
 RestartSec=5
 StandardOutput=journal
@@ -721,15 +861,20 @@ EOF
         log_info "  安装成功！服务已启动并正在运行"
         log_info "=========================================="
         echo ""
+        echo "  配置文件: ${CONFIG_PATH}"
+        echo "  程序路径: ${INSTALL_PATH}"
+        echo ""
         echo "  常用命令:"
         echo "    查看状态: systemctl status ${SERVICE_NAME}"
         echo "    查看日志: journalctl -u ${SERVICE_NAME} -f"
         echo "    重启服务: systemctl restart ${SERVICE_NAME}"
         echo "    停止服务: systemctl stop ${SERVICE_NAME}"
+        echo "    编辑配置: nano ${CONFIG_PATH}"
         echo "    卸载程序: bash install.sh --uninstall"
         echo ""
     else
         log_error "服务启动失败！请检查配置是否正确。"
+        log_error "配置文件: ${CONFIG_PATH}"
         log_error "使用以下命令查看详细错误:"
         echo "    systemctl status ${SERVICE_NAME}"
         echo "    journalctl -u ${SERVICE_NAME} -n 50"

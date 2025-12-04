@@ -16,7 +16,6 @@ rustls-pki-types = "1"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 miniserde = { version = "0.1", default-features = false, features = ["std"] }
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["rustls-tls-webpki-roots", "connect"] }
-palc = { version = "0.0.2", default-features = false, features = ["help"] }
 sysinfo = { version = "0.37.2", default-features = false, features = ["disk", "system", "multithread", "network"] }
 time = { version = "0.3.44", default-features = false, features = ["local-offset", "formatting"] }
 icmp-socket = "0.2.0"

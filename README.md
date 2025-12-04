@@ -10,20 +10,34 @@ Agent
 
 致力于实现[原版 Agent](https://github.com/komari-monitor/komari-agent) 的所有功能，并拓展更多功能
 
-## 一键脚本
+## 一键安装
 
-- 交互模式
+### Linux
 
-  ```bash
-  wget -O setup-client-rs.sh "https://raw.githubusercontent.com/ilnli/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh && bash ./setup-client-rs.sh
-  ```
+```bash
+# 交互式安装
+bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh)
 
-- 直接传入参数
+# 带参数安装
+bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) \
+  --http-server "http://your.server:port" --token "your_token"
 
-  ```bash
-  wget -O setup-client-rs.sh "https://raw.githubusercontent.com/ilnli/komari-monitor-rs/refs/heads/main/install.sh" && chmod +x setup-client-rs.sh
-  bash setup-client-rs.sh --http-server "http://your.server:port" --ws-server "ws://your.server:port" --token "your_token"
-  ```
+# 管理模式
+bash <(curl -sL https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.sh) --manage
+```
+
+### Windows (PowerShell 管理员)
+
+```powershell
+# 交互式安装
+irm https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/install.ps1 -OutFile install.ps1; .\install.ps1
+
+# 带参数安装
+.\install.ps1 -HttpServer "http://your.server:port" -Token "your_token"
+
+# 管理模式
+.\install.ps1 -Manage
+```
 
 ## 与原版的差异
 
@@ -47,12 +61,6 @@ Agent
 
 - GPU Name 检测
 
-除此之外，还有希望添加的功能:
-
-- 自动更新
-- 自动安装
-- Bash / PWSH 一键脚本
-
 ## 下载
 
 在本项目的 [Release 界面](https://github.com/ilnli/komari-monitor-rs/releases/tag/latest) 即可下载，按照架构选择即可
@@ -63,41 +71,60 @@ Agent
 
 ## Usage
 
+本项目使用配置文件进行配置。
+
+- Linux: `/etc/komari-monitor-rs/config`
+- Windows: `%ProgramData%\Komari\config`
+- 手动运行时默认读取程序同目录下的 `config` 文件
+
+### 命令行参数
+
 ```
 Komari Monitor Agent in Rust
 
-Usage: komari-monitor-rs [OPTIONS] --http-server <HTTP_SERVER> --token <TOKEN>
+Usage: komari-monitor-rs [OPTIONS]
 
 Options:
-      --http-server <HTTP_SERVER>
-          设置主端 Http 地址
-      --ws-server <WS_SERVER>
-          设置主端 WebSocket 地址
-  -t, --token <TOKEN>
-          设置 Token
-      --ip-provider <IP_PROVIDER>
-          公网 IP 接口 [default: ipinfo] [possible values: cloudflare, ipinfo]
-      --terminal
-          启用 Terminal (默认关闭)
-      --terminal-entry <TERMINAL_ENTRY>
-          自定义 Terminal 入口 [default: default]
-  -f, --fake <FAKE>
-          设置虚假倍率 [default: 1]
-      --realtime-info-interval <REALTIME_INFO_INTERVAL>
-          设置 Real-Time Info 上传间隔时间 (ms) [default: 1000]
-      --tls
-          启用 TLS (默认关闭)
-      --ignore-unsafe-cert
-          忽略证书验证
-      --log-level <LOG_LEVEL>
-          设置日志等级 (反馈问题请开启 Debug 或者 Trace) [default: info] [possible values: error, warn, info, debug, trace]
-  -h, --help
-          Print help
-  -V, --version
-          Print version
+  -c, --config <配置文件路径>  指定配置文件路径 (默认: 程序同目录下的 config 文件)
+  -h, --help                   显示帮助信息
+  -V, --version                显示版本信息
 ```
 
-**必须设置 `--http-server` / `--token`**
+### 配置文件格式
+
+配置文件采用简单的 `key = value` 格式：
+
+```ini
+# Komari Monitor RS 配置文件
+
+# 主端地址 (必需)
+http_server = "http://your.server:port"
+# WebSocket 地址 (可选，默认从 http_server 自动推断)
+# ws_server = "ws://your.server:port"
+token = "your_token"
+
+# IP 提供商 (ipinfo / cloudflare)
+ip_provider = "ipinfo"
+
+# 功能开关
+terminal = false
+tls = false
+ignore_unsafe_cert = false
+
+# 性能设置
+fake = 1
+realtime_info_interval = 1000
+billing_day = 1
+
+# 日志等级 (error / warn / info / debug / trace)
+log_level = "info"
+
+# 自动升级 (0 = 禁用，其他数字为检查间隔小时数)
+auto_update = 0
+update_repo = "ilnli/komari-monitor-rs"
+```
+
+**必须设置 `http_server` 和 `token`**
 
 ## Nix 安装
 
@@ -126,17 +153,19 @@ Options:
           services.komari-monitor-rs = {
             enable = true;
             settings = {
-              http-server = "https://komari.example.com:12345";
-              ws-server = "ws://ws-komari.example.com:54321";
+              http_server = "https://komari.example.com:12345";
+              ws_server = "ws://ws-komari.example.com:54321";
               token = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
-              ip-provider = "ipinfo";
+              ip_provider = "ipinfo";
               terminal = true;
-              terminal-entry = "default";
+              terminal_entry = "default";
               fake = 1;
-              realtime-info-interval = 1000;
+              realtime_info_interval = 1000;
               tls = true;
-              ignore-unsafe-cert = false;
-              log-level = "info";
+              ignore_unsafe_cert = false;
+              log_level = "info";
+              billing_day = 1;
+              auto_update = 0;
             };
           };
         }

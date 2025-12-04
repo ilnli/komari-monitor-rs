@@ -1,4 +1,4 @@
-use crate::command_parser::IpProvider;
+use crate::config::IpProvider;
 use log::trace;
 use miniserde::{Deserialize, Serialize, json};
 use std::net::{Ipv4Addr, Ipv6Addr};

@@ -1,115 +1,79 @@
-use palc::{Parser, ValueEnum};
-use std::fs;
+use crate::config::Config;
+use std::path::PathBuf;
 
-#[derive(Parser, Debug, Clone)]
-#[command(
-    version,
-    long_about = "komari-monitor-rs is a third-party high-performance monitoring agent for the komari monitoring service.",
-    after_long_help = "必须设置 --http-server / --token\n--ip-provider 接受 cloudflare / ipinfo\n--log-level 接受 error, warn, info, debug, trace\n\n本 Agent 开源于 Github , 使用强力的 Rust 驱动, 爱来自 Komari"
-)]
-pub struct Args {
-    /// 设置主端 Http 地址
-    #[arg(long)]
-    pub http_server: String,
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const HELP_TEXT: &str = r#"komari-monitor-rs - Komari 第三方高性能监控 Agent
 
-    /// 设置主端 WebSocket 地址
-    #[arg(long)]
-    pub ws_server: Option<String>,
+用法:
+  komari-monitor-rs [选项]
 
-    /// 设置 Token
-    #[arg(short, long, allow_hyphen_values = true)]
-    pub token: String,
+选项:
+  -c, --config <路径>    配置文件路径 (默认: 程序同目录下的 config 文件)
+  -h, --help             显示帮助信息
+  -V, --version          显示版本号
 
-    /// 公网 IP 接口
-    #[arg(long, default_value_t=ip_provider())]
-    pub ip_provider: IpProvider,
+配置文件格式 (key = value):
+  http_server = "http://your.server:port"   # 必需
+  token = "your_token"                       # 必需
+  ws_server = "ws://your.server:port"        # 可选
+  ip_provider = "ipinfo"                     # ipinfo / cloudflare
+  terminal = false                           # 启用 Web Terminal
+  terminal_entry = "bash"                    # Terminal 入口程序
+  fake = 1.0                                 # 虚假倍率
+  realtime_info_interval = 1000              # 上报间隔 (ms)
+  tls = false                                # 启用 TLS
+  ignore_unsafe_cert = false                 # 忽略证书验证
+  log_level = "info"                         # error/warn/info/debug/trace
+  billing_day = 1                            # 计费日 (每月第几号)
+  auto_update = 0                            # 自动升级间隔 (小时，0=禁用)
+  update_repo = "ilnli/komari-monitor-rs"    # 升级仓库
 
-    /// 启用 Terminal (默认关闭)
-    #[arg(long, default_value_t = false)]
-    pub terminal: bool,
+本 Agent 开源于 Github, 使用强力的 Rust 驱动, 爱来自 Komari
+"#;
 
-    /// 自定义 Terminal 入口
-    #[arg(long, default_value_t = terminal_entry())]
-    pub terminal_entry: String,
-
-    /// 设置虚假倍率
-    #[arg(short, long, default_value_t = 1.0)]
-    pub fake: f64,
-
-    /// 设置 Real-Time Info 上传间隔时间 (ms)
-    #[arg(long, default_value_t = 1000)]
-    pub realtime_info_interval: u64,
-
-    /// 启用 TLS (默认关闭)
-    #[arg(long, default_value_t = false)]
-    pub tls: bool,
-
-    /// 忽略证书验证
-    #[arg(long, default_value_t = false)]
-    pub ignore_unsafe_cert: bool,
-
-    /// 设置日志等级 (反馈问题请开启 Debug 或者 Trace)
-    #[arg(long, default_value_t = log_level())]
-    pub log_level: LogLevel,
-
-    /// 设置计费日 (每月第几号开始统计流量，默认为1号)
-    #[arg(long, default_value_t = 1)]
-    pub billing_day: u32,
-
-    /// 启用自动升级 (检查间隔小时数，0为禁用)
-    #[arg(long, default_value_t = 0)]
-    pub auto_update: u64,
-
-    /// 自动升级使用的 GitHub 仓库
-    #[arg(long, default_value_t = default_repo())]
-    pub update_repo: String,
-}
-
-fn default_repo() -> String {
-    "ilnli/komari-monitor-rs".to_string()
-}
-
-fn terminal_entry() -> String {
-    "default".to_string()
-}
-
-fn ip_provider() -> IpProvider {
-    IpProvider::Ipinfo
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum IpProvider {
-    Cloudflare,
-    Ipinfo,
-}
-
-fn log_level() -> LogLevel {
-    LogLevel::Info
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum LogLevel {
-    Error,
-    Warn,
-    Info,
-    Debug,
-    Trace,
-}
-
-impl Args {
-    pub fn par() -> Self {
-        let mut args = Self::parse();
-        if args.terminal_entry == "default" {
-            args.terminal_entry = {
-                if cfg!(windows) {
-                    "cmd.exe".to_string()
-                } else if fs::exists("/bin/bash").unwrap_or(false) {
-                    "bash".to_string()
+pub fn parse_args() -> Config {
+    let args: Vec<String> = std::env::args().collect();
+    let mut config_path: Option<PathBuf> = None;
+    
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => {
+                println!("{HELP_TEXT}");
+                std::process::exit(0);
+            }
+            "-V" | "--version" => {
+                println!("komari-monitor-rs {VERSION}");
+                std::process::exit(0);
+            }
+            "-c" | "--config" => {
+                if i + 1 < args.len() {
+                    config_path = Some(PathBuf::from(&args[i + 1]));
+                    i += 2;
                 } else {
-                    "sh".to_string()
+                    eprintln!("错误: --config 需要指定路径");
+                    std::process::exit(1);
                 }
-            };
+            }
+            _ => {
+                eprintln!("未知参数: {}", args[i]);
+                eprintln!("使用 --help 查看帮助");
+                std::process::exit(1);
+            }
         }
-        args
+    }
+    
+    let path = config_path.unwrap_or_else(Config::default_path);
+    
+    match Config::load(&path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("加载配置失败: {e}");
+            eprintln!("配置文件路径: {}", path.display());
+            eprintln!("\n请确保配置文件存在且包含必需的 http_server 和 token 配置项");
+            eprintln!("使用 --help 查看配置文件格式");
+            std::process::exit(1);
+        }
     }
 }
+

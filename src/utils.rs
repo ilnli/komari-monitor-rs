@@ -1,4 +1,4 @@
-use crate::command_parser::LogLevel;
+use crate::config::LogLevel;
 use crate::rustls_config::create_dangerous_config;
 use log::{Level, info};
 use std::sync::Arc;
@@ -10,7 +10,7 @@ use tokio_tungstenite::{
 };
 use url::{ParseError, Url};
 
-pub fn init_logger(log_level: &LogLevel) {
+pub fn init_logger(log_level: LogLevel) {
     #[cfg(target_os = "windows")]
     simple_logger::set_up_windows_color_terminal();
 

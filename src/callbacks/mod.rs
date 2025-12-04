@@ -1,7 +1,7 @@
 use crate::callbacks::exec::exec_command;
 use crate::callbacks::ping::ping_target;
 use crate::callbacks::pty::{get_pty_ws_link, handle_pty_session};
-use crate::command_parser::Args;
+use crate::config::Config;
 use crate::utils::{ConnectionUrls, connect_ws};
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
@@ -26,7 +26,7 @@ type Reader = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 type LockedWriter = Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>;
 
 pub async fn handle_callbacks(
-    args: &Args,
+    config: &Config,
     connection_urls: &ConnectionUrls,
     reader: &mut Reader,
     locked_writer: &LockedWriter,
@@ -52,11 +52,11 @@ pub async fn handle_callbacks(
 
         match json.message.as_str() {
             "exec" => {
-                if args.terminal {
+                if config.terminal {
                     tokio::spawn({
                         let utf8_cloned_for_exec = utf8_cloned.clone();
                         let exec_callback_url = connection_urls.exec_callback.clone();
-                        let ignore_unsafe_cert = args.ignore_unsafe_cert;
+                        let ignore_unsafe_cert = config.ignore_unsafe_cert;
 
                         async move {
                             if let Err(e) = exec_command(
@@ -97,9 +97,9 @@ pub async fn handle_callbacks(
             }
 
             "terminal" => {
-                if args.terminal {
+                if config.terminal {
                     let ws_terminal_url = connection_urls.clone().ws_terminal.clone();
-                    let args = args.clone();
+                    let config = config.clone();
                     let utf8_cloned = utf8_cloned.clone();
 
                     tokio::spawn(async move {
@@ -112,7 +112,7 @@ pub async fn handle_callbacks(
                         };
 
                         let ws_stream =
-                            match connect_ws(&ws_url, args.tls, args.ignore_unsafe_cert).await {
+                            match connect_ws(&ws_url, config.tls, config.ignore_unsafe_cert).await {
                                 Ok(ws_stream) => ws_stream,
                                 Err(e) => {
                                     error!("无法连接到 PTY Websocket: {e}");
@@ -120,7 +120,7 @@ pub async fn handle_callbacks(
                                 }
                             };
 
-                        if let Err(e) = handle_pty_session(ws_stream, &args.terminal_entry).await {
+                        if let Err(e) = handle_pty_session(ws_stream, &config.terminal_entry).await {
                             error!("PTY Websocket 处理错误: {e}");
                         }
                     });

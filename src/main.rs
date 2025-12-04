@@ -8,7 +8,7 @@
 )]
 
 use crate::callbacks::handle_callbacks;
-use crate::command_parser::Args;
+use crate::command_parser::parse_args;
 use crate::data_struct::{BasicInfo, RealTimeInfo};
 use crate::get_info::network::traffic_stats::TrafficStats;
 use crate::utils::{build_urls, connect_ws, init_logger};
@@ -27,6 +27,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 mod callbacks;
 mod command_parser;
+mod config;
 mod data_struct;
 mod get_info;
 mod rustls_config;
@@ -35,9 +36,9 @@ mod auto_update;
 
 #[tokio::main]
 async fn main() {
-    let args = Args::par();
+    let config = parse_args();
 
-    init_logger(&args.log_level);
+    init_logger(config.log_level);
 
     #[cfg(all(feature = "nyquest-support", not(target_os = "linux")))]
     {
@@ -52,15 +53,15 @@ async fn main() {
     }
 
     let connection_urls =
-        build_urls(&args.http_server, args.ws_server.as_ref(), &args.token).unwrap();
+        build_urls(&config.http_server, config.ws_server.as_ref(), &config.token).unwrap();
 
-    info!("成功读取参数: {args:?}");
+    info!("成功读取配置: {config:?}");
 
     // 启动自动升级检查任务
-    if args.auto_update > 0 {
-        let update_repo = args.update_repo.clone();
-        let ignore_cert = args.ignore_unsafe_cert;
-        let interval_hours = args.auto_update;
+    if config.auto_update > 0 {
+        let update_repo = config.update_repo.clone();
+        let ignore_cert = config.ignore_unsafe_cert;
+        let interval_hours = config.auto_update;
         std::thread::spawn(move || {
             loop {
                 auto_update::check_and_upgrade(&update_repo, ignore_cert);
@@ -73,8 +74,8 @@ async fn main() {
     loop {
         let Ok(ws_stream) = connect_ws(
             &connection_urls.ws_real_time,
-            args.tls,
-            args.ignore_unsafe_cert,
+            config.tls,
+            config.ignore_unsafe_cert,
         )
         .await
         else {
@@ -91,12 +92,12 @@ async fn main() {
 
         // Handle callbacks
         {
-            let args_cloned = args.clone();
+            let config_cloned = config.clone();
             let connection_urls_cloned = connection_urls.clone();
             let locked_write_cloned = locked_write.clone();
             let _listener = tokio::spawn(async move {
                 handle_callbacks(
-                    &args_cloned,
+                    &config_cloned,
                     &connection_urls_cloned,
                     &mut read,
                     &locked_write_cloned,
@@ -115,12 +116,12 @@ async fn main() {
         );
         sysinfo_sys.refresh_memory_specifics(MemoryRefreshKind::everything());
 
-        let basic_info = BasicInfo::build(&sysinfo_sys, args.fake, &args.ip_provider).await;
+        let basic_info = BasicInfo::build(&sysinfo_sys, config.fake, &config.ip_provider).await;
 
-        basic_info.push(connection_urls.basic_info.clone(), args.ignore_unsafe_cert);
+        basic_info.push(connection_urls.basic_info.clone(), config.ignore_unsafe_cert);
 
         // 初始化流量统计
-        let mut traffic_stats = TrafficStats::load_or_create(args.billing_day);
+        let mut traffic_stats = TrafficStats::load_or_create(config.billing_day);
 
         // 设置初始的系统总流量（用于计算增量）
         if traffic_stats.last_total_up == 0 && traffic_stats.last_total_down == 0 {
@@ -148,8 +149,8 @@ async fn main() {
                 &networks,
                 &disks,
                 &mut traffic_stats,
-                args.realtime_info_interval,
-                args.fake,
+                config.realtime_info_interval,
+                config.fake,
             );
 
             // 每 60 次上报保存一次流量统计（默认间隔下约 1 分钟）
@@ -171,7 +172,7 @@ async fn main() {
 
             sleep(Duration::from_millis({
                 let end = u64::try_from(end_time.as_millis()).unwrap_or(0);
-                args.realtime_info_interval.saturating_sub(end)
+                config.realtime_info_interval.saturating_sub(end)
             }))
             .await;
         }

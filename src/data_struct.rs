@@ -1,4 +1,4 @@
-use crate::command_parser::IpProvider;
+use crate::config::IpProvider;
 
 use crate::get_info::cpu::{arch, cpu_info_without_usage, realtime_cpu};
 use crate::get_info::ip::ip;
