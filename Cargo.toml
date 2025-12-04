@@ -1,6 +1,6 @@
 [package]
 name = "komari-monitor-rs"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 authors = ["GenshinMinecrat <gm@highp.ing>", "ilnli <220916405+ilnli@users.noreply.github.com>"]
 description = "Komari Monitor Agent in Rust"
