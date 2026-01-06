@@ -392,11 +392,8 @@ do_start() {
 }
 
 do_stop() {
-    if ! check_service_running; then
-        log_warn "服务未在运行"
-        return
-    fi
-    systemctl stop ${SERVICE_NAME}
+    # 直接尝试停止，不检查状态（避免重启循环中误判）
+    systemctl stop ${SERVICE_NAME} 2>/dev/null || true
     log_info "服务已停止"
 }
 
