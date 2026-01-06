@@ -64,9 +64,48 @@ CONNS: TCP: 12 | UDP: 4
 
 该功能暂未稳定，有问题请及时反馈
 
-## 一键脚本
+## 管理脚本
 
-**本脚本已不再支持，该项目不面向小白用户，请自行配置**
+提供 Linux 管理脚本，支持安装、升级、配置、服务管理等功能。
+
+### 下载脚本
+
+```bash
+# 下载管理脚本
+wget -O komari-manager.sh https://raw.githubusercontent.com/ilnli/komari-monitor-rs/main/komari-manager.sh
+chmod +x komari-manager.sh
+```
+
+### 常用命令
+
+```bash
+# 安装 (交互式配置)
+sudo ./komari-manager.sh install
+
+# 使用代理安装 (中国大陆用户)
+sudo ./komari-manager.sh install --proxy
+
+# 升级到最新版本 (保留配置)
+sudo ./komari-manager.sh upgrade
+
+# 修改配置
+sudo ./komari-manager.sh config
+
+# 查看状态
+sudo ./komari-manager.sh status
+
+# 启动/停止/重启服务
+sudo ./komari-manager.sh start
+sudo ./komari-manager.sh stop
+sudo ./komari-manager.sh restart
+
+# 查看日志
+sudo ./komari-manager.sh logs
+sudo ./komari-manager.sh logs -f    # 实时跟踪
+
+# 卸载
+sudo ./komari-manager.sh uninstall
+```
 
 ## 与原版的差异
 
