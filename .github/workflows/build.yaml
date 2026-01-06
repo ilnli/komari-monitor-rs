@@ -10,150 +10,17 @@ on:
   workflow_dispatch:
 
 jobs:
-  #  android-arm-release:
-  #    name: Build - ${{ matrix.platform.release_for }}
-  #    strategy:
-  #      matrix:
-  #        platform:
-  #          - release_for: android_armv7
-  #            target: armv7-linux-androideabi
-  #            binary_name: komari-monitor-rs-android-armv7
-  #          - release_for: android_arm
-  #            target: arm-linux-androideabi
-  #            binary_name: komari-monitor-rs-android-arm
-  #    runs-on: ubuntu-latest
-  #    steps:
-  #      - name: Checkout
-  #        uses: actions/checkout@v4
-  #      - name: Install Lib
-  #        run: sudo apt update && sudo apt install -y musl-tools musl-dev musl upx
-  #      - name: Install Cross
-  #        run: cargo install cross --git https://github.com/cross-rs/cross
-  #      - name: Build binary
-  #        run: cross build --target ${{ matrix.platform.target }} --profile minimal --jobs 32 --locked
-  #        env:
-  #          CROSS_PASTEBIN_SECRET: ${{ secrets.PASTEBIN_SECRET }}
-  #          CROSS_PASTEBIN_URL: ${{ secrets.PASTEBIN_URL }}
-  #          CROSS_NO_WARNINGS: 0
-  #      - name: Rename binary
-  #        run: cp target/${{ matrix.platform.target }}/minimal/komari-monitor-rs target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #      - name: Upload binary
-  #        uses: actions/upload-artifact@v4
-  #        with:
-  #          name: ${{ matrix.platform.target }}
-  #          path: target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #      - name: Publish to GitHub Release
-  #            if: github.event_name == 'push'
-  #        uses: softprops/action-gh-release@v1
-  #        with:
-  #          files: |
-  #            target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #          tag_name: latest # 使用固定的标签名称作为发布版本号
-  #          body: |
-  #            Note: All Release operations will publish the Binary and software packages here
-  #            Latest release for Commit: ${{ github.sha }}
-  #          draft: false
-  #          prerelease: false
-  #        env:
-  #          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  #
-  #  android-arm64-release:
-  #    name: Build - ${{ matrix.platform.release_for }}
-  #    strategy:
-  #      matrix:
-  #        platform:
-  #          - release_for: android_aarch64
-  #            target: aarch64-linux-android
-  #            binary_name: komari-monitor-rs-android-aarch64
-  #    runs-on: ubuntu-latest
-  #    steps:
-  #      - name: Checkout
-  #        uses: actions/checkout@v4
-  #      - name: Install Lib
-  #        run: sudo apt update && sudo apt install -y musl-tools musl-dev musl upx
-  #      - name: Install Cross
-  #        run: cargo install cross --git https://github.com/cross-rs/cross
-  #      - name: Build binary
-  #        run: cross build --target ${{ matrix.platform.target }} --profile minimal --jobs 32 --locked
-  #        env:
-  #          CROSS_NO_WARNINGS: 0
-  #          CROSS_PASTEBIN_SECRET: ${{ secrets.PASTEBIN_SECRET }}
-  #          CROSS_PASTEBIN_URL: ${{ secrets.PASTEBIN_URL }}
-  #      - name: Rename binary
-  #        run: cp target/${{ matrix.platform.target }}/minimal/komari-monitor-rs target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #      - name: Upload binary
-  #        uses: actions/upload-artifact@v4
-  #        with:
-  #          name: ${{ matrix.platform.target }}
-  #          path: target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #      - name: Publish to GitHub Release
-  #            if: github.event_name == 'push'
-  #        uses: softprops/action-gh-release@v1
-  #        with:
-  #          files: |
-  #            target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-  #          tag_name: latest # 使用固定的标签名称作为发布版本号
-  #          body: |
-  #            Note: All Release operations will publish the Binary and software packages here
-  #            Latest release for Commit: ${{ github.sha }}
-  #          draft: false
-  #          prerelease: false
-  #        env:
-  #          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  linux-all-platforms-release:
+  linux-release:
     name: Build - ${{ matrix.platform.release_for }}
     strategy:
       matrix:
         platform:
-          - release_for: linux_x86_64_musl
-            target: x86_64-unknown-linux-musl
-            binary_name: komari-monitor-rs-linux-x86_64-musl
           - release_for: linux_x86_64_gnu
             target: x86_64-unknown-linux-gnu
             binary_name: komari-monitor-rs-linux-x86_64-gnu
-          - release_for: linux_arm_gnueabi
-            target: arm-unknown-linux-gnueabi
-            binary_name: komari-monitor-rs-linux-arm-gnueabi
-          - release_for: linux_arm_gnueabihf
-            target: arm-unknown-linux-gnueabihf
-            binary_name: komari-monitor-rs-linux-arm-gnueabihf
           - release_for: linux_aarch64_gnu
             target: aarch64-unknown-linux-gnu
             binary_name: komari-monitor-rs-linux-aarch64-gnu
-          - release_for: linux_aarch64_musl
-            target: aarch64-unknown-linux-musl
-            binary_name: komari-monitor-rs-linux-aarch64-musl
-          - release_for: linux_i686_gnu
-            target: i686-unknown-linux-gnu
-            binary_name: komari-monitor-rs-linux-i686-gnu
-          - release_for: linux_i686_musl
-            target: i686-unknown-linux-musl
-            binary_name: komari-monitor-rs-linux-i686-musl
-          - release_for: linux_arm_musleabi
-            target: arm-unknown-linux-musleabi
-            binary_name: komari-monitor-rs-linux-arm-musleabi
-          - release_for: linux_arm_musleabihf
-            target: arm-unknown-linux-musleabihf
-            binary_name: komari-monitor-rs-linux-arm-musleabihf
-          - release_for: linux_armv5te_gnu
-            target: armv5te-unknown-linux-gnueabi
-            binary_name: komari-monitor-rs-linux-armv5te-gnueabi
-          - release_for: linux_armv5te_musl
-            target: armv5te-unknown-linux-musleabi
-            binary_name: komari-monitor-rs-linux-armv5te-musleabi
-          - release_for: linux_armv7_gnueabi
-            target: armv7-unknown-linux-gnueabi
-            binary_name: komari-monitor-rs-linux-armv7-gnueabi
-          - release_for: linux_armv7_gnueabihf
-            target: armv7-unknown-linux-gnueabihf
-            binary_name: komari-monitor-rs-linux-armv7-gnueabihf
-          - release_for: linux_armv7_musleabi
-            target: armv7-unknown-linux-musleabi
-            binary_name: komari-monitor-rs-linux-armv7-musleabi
-          - release_for: linux_armv7_musleabihf
-            target: armv7-unknown-linux-musleabihf
-            binary_name: komari-monitor-rs-linux-armv7-musleabihf
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -182,34 +49,7 @@ jobs:
         with:
           files: |
             target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build nyquest binary
-        run: cargo clean && cross build --target ${{ matrix.platform.target }} --features nyquest-support --profile minimal --jobs 32 --locked
-        env:
-          CROSS_NO_WARNINGS: 0
-      - name: Compress binary
-        run: upx --brute target/${{ matrix.platform.target }}/minimal/komari-monitor-rs
-      - name: Rename binary
-        run: cp target/${{ matrix.platform.target }}/minimal/komari-monitor-rs target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}-nyquest
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform.target }}-nyquest
-          path: target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}-nyquest
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/${{ matrix.platform.target }}/minimal/${{ matrix.platform.binary_name }}-nyquest
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: latest
           body: |
             Note: All Release operations will publish the Binary and software packages here
             Latest release for Commit: ${{ github.sha }}
@@ -237,30 +77,7 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cargo Build nyquest
-        run: cargo clean && cargo build --profile minimal --features nyquest-support
-      - name: Rename Binary
-        run: move target/minimal/komari-monitor-rs.exe target/minimal/komari-monitor-rs-nyquest.exe
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-nyquest
-          path: target/minimal/komari-monitor-rs-nyquest.exe
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/minimal/komari-monitor-rs-nyquest.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: latest
           body: |
             Note: All Release operations will publish the Binary and software packages here
             Latest release for Commit: ${{ github.sha }}
@@ -292,136 +109,7 @@ jobs:
         with:
           files: |
             target/minimal/komari-monitor-rs-macos-arm64
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cargo Build nyquest
-        run: cargo clean && cargo build --profile minimal --features nyquest-support
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-arm64-nyquest
-          path: target/minimal/komari-monitor-rs
-      - name: Rename Binary
-        run: mv target/minimal/komari-monitor-rs target/minimal/komari-monitor-rs-macos-arm64-nyquest
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/minimal/komari-monitor-rs-macos-arm64-nyquest
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  windows-old-x86-release:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Install Rust Toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Cargo Build
-        run: cargo clean && cargo build --profile minimal --features ureq-support,winxp-support --target i686-pc-windows-msvc
-      - name: Rename Binary
-        run: move target/i686-pc-windows-msvc/minimal/komari-monitor-rs.exe target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86.exe
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-old-x86
-          path: target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86.exe
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cargo Build nyquest
-        run: cargo clean && cargo build --profile minimal --features nyquest-support,winxp-support --target i686-pc-windows-msvc
-      - name: Rename Binary
-        run: move target/i686-pc-windows-msvc/minimal/komari-monitor-rs.exe target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86-nyquest.exe
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-old-x86-nyquest
-          path: target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86-nyquest.exe
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/i686-pc-windows-msvc/minimal/komari-monitor-rs-old-x86-nyquest.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  windows-old-x64-release:
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Install Rust Toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
-      - name: Cargo Build
-        run: cargo clean && cargo build --profile minimal --features ureq-support,winxp-support --target x86_64-pc-windows-msvc
-      - name: Rename Binary
-        run: move target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs.exe target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64.exe
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-old-x64
-          path: target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64.exe
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
-          body: |
-            Note: All Release operations will publish the Binary and software packages here
-            Latest release for Commit: ${{ github.sha }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cargo Build nyquest
-        run: cargo clean && cargo build --profile minimal --features nyquest-support,winxp-support --target x86_64-pc-windows-msvc
-      - name: Rename Binary
-        run: move target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs.exe target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64-nyquest.exe
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-old-x64-nyquest
-          path: target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64-nyquest.exe
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: |
-            target/x86_64-pc-windows-msvc/minimal/komari-monitor-rs-old-x64-nyquest.exe
-          tag_name: latest # 使用固定的标签名称作为发布版本号
+          tag_name: latest
           body: |
             Note: All Release operations will publish the Binary and software packages here
             Latest release for Commit: ${{ github.sha }}
