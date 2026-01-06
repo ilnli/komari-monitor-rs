@@ -138,7 +138,7 @@ parse_existing_config() {
     CURRENT_TOKEN=$(echo "$exec_line" | grep -oP '(?<=--token ")[^"]+' || echo "")
     CURRENT_FAKE=$(echo "$exec_line" | grep -oP '(?<=--fake ")[^"]+' || echo "1")
     CURRENT_INTERVAL=$(echo "$exec_line" | grep -oP '(?<=--realtime-info-interval ")[^"]+' || echo "1000")
-    CURRENT_BILLING_DAY=$(echo "$exec_line" | grep -oP '(?<=--billing-day ")[^"]+' || echo "1")
+    CURRENT_BILLING_DAY=$(echo "$exec_line" | grep -oP '(?<=--traffic-reset-day ")[^"]+' || echo "1")
 
     # 检查布尔标志
     [[ "$exec_line" == *"--tls"* ]] && CURRENT_TLS="true" || CURRENT_TLS="false"
@@ -188,7 +188,7 @@ create_service_file() {
     exec_cmd="$exec_cmd --token \"${token}\""
     exec_cmd="$exec_cmd --fake \"${fake}\""
     exec_cmd="$exec_cmd --realtime-info-interval \"${interval}\""
-    exec_cmd="$exec_cmd --billing-day \"${billing_day}\""
+    exec_cmd="$exec_cmd --traffic-reset-day \"${billing_day}\""
 
     [ "$tls_flag" = "true" ] && exec_cmd="$exec_cmd --tls"
     [ "$ignore_cert_flag" = "true" ] && exec_cmd="$exec_cmd --ignore-unsafe-cert"
