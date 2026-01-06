@@ -250,6 +250,16 @@ async fn initialize_network_state_and_offset(
     network_config: &NetworkConfig,
     networks: &mut Networks,
 ) -> Result<(File, NetworkInfo), String> {
+    // Ensure parent directory exists
+    let save_path = std::path::Path::new(&network_config.network_save_path);
+    if let Some(parent) = save_path.parent() {
+        if !parent.exists() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create parent directory: {e}"))?;
+            info!("Created parent directory: {}", parent.display());
+        }
+    }
+
     let mut file = match OpenOptions::new()
         .read(true)
         .write(true)
