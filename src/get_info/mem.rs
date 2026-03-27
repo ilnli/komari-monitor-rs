@@ -36,6 +36,7 @@ pub fn mem_info_without_usage(sysinfo_sys: &System) -> MemDiskTotalInfoWithOutUs
 pub fn realtime_mem(sysinfo_sys: &System) -> Ram {
     let ram = Ram {
         used: sysinfo_sys.total_memory() - sysinfo_sys.available_memory(),
+        total: sysinfo_sys.total_memory(),
     };
     trace!("REALTIME MEM successfully retrieved: {ram:?}");
     ram
@@ -44,6 +45,7 @@ pub fn realtime_mem(sysinfo_sys: &System) -> Ram {
 pub fn realtime_swap(sysinfo_sys: &System) -> Swap {
     let swap = Swap {
         used: sysinfo_sys.used_swap(),
+        total: sysinfo_sys.total_swap(),
     };
     trace!("REALTIME SWAP successfully retrieved: {swap:?}");
     swap
@@ -51,13 +53,18 @@ pub fn realtime_swap(sysinfo_sys: &System) -> Swap {
 
 pub fn realtime_disk(disk: &Disks) -> Disk {
     let mut used_disk: u64 = 0;
+    let mut total_disk: u64 = 0;
     let disk_list = filter_disks(disk);
     for disk in disk_list {
         trace!("FILTERED DISK: {disk:?}");
         used_disk += disk.total_space() - disk.available_space();
+        total_disk += disk.total_space();
     }
 
-    let disk_info = Disk { used: used_disk };
+    let disk_info = Disk { 
+        used: used_disk,
+        total: total_disk,
+    };
     trace!("REALTIME DISK successfully retrieved: {disk_info:?}");
     disk_info
 }

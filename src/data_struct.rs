@@ -127,16 +127,19 @@ pub struct Cpu {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Ram {
     pub used: u64,
+    pub total: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Swap {
     pub used: u64,
+    pub total: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Disk {
     pub used: u64,
+    pub total: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -189,12 +192,15 @@ impl RealTimeInfo {
 
         let ram = realtime_mem(sysinfo_sys);
         let fake_ram_used = (ram.used as f64 * fake) as u64;
+        let fake_ram_total = (ram.total as f64 * fake) as u64;
 
         let swap = realtime_swap(sysinfo_sys);
         let fake_swap_used = (swap.used as f64 * fake) as u64;
+        let fake_swap_total = (swap.total as f64 * fake) as u64;
 
         let disk_info = realtime_disk(disk);
         let fake_disk_used = (disk_info.used as f64 * fake) as u64;
+        let fake_disk_total = (disk_info.total as f64 * fake) as u64;
 
         let load = realtime_load();
         let fake_load1 = load.load1 * fake;
@@ -218,12 +224,15 @@ impl RealTimeInfo {
             cpu,
             ram: Ram {
                 used: fake_ram_used,
+                total: fake_ram_total,
             },
             swap: Swap {
                 used: fake_swap_used,
+                total: fake_swap_total,
             },
             disk: Disk {
                 used: fake_disk_used,
+                total: fake_disk_total,
             },
             load: Load {
                 load1: fake_load1,
