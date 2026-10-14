@@ -100,28 +100,31 @@ download_file() {
 
 # --- 架构检测 ---
 get_arch() {
-    local arch=$(uname -m)
+    local arch
+    arch=$(uname -m)
     case $arch in
         x86_64)
             echo "komari-monitor-rs-linux-x86_64-gnu"
             ;;
-        i686|i386)
-            echo "komari-monitor-rs-linux-i686-gnu"
-            ;;
         aarch64|arm64)
             echo "komari-monitor-rs-linux-aarch64-gnu"
             ;;
-        armv7l|armv7)
-            echo "komari-monitor-rs-linux-armv7-gnueabihf"
-            ;;
-        armv5tejl|armv5te)
-            echo "komari-monitor-rs-linux-armv5te-gnueabi"
-            ;;
         *)
-            log_error "不支持的系统架构: $arch"
-            exit 1
+            log_error "当前仅发布 Linux x86_64/aarch64，未提供此架构的安装包: $arch" >&2
+            return 1
             ;;
     esac
+}
+
+# Read quoted or unquoted long options without evaluating service-file content.
+get_option_value() {
+    local line="$1" option="$2" default="${3:-}"
+    local pattern="(^|[[:space:]])--(${option})(=|[[:space:]]+)(\"([^\"]*)\"|([^[:space:]]+))"
+    if [[ "$line" =~ $pattern ]]; then
+        printf '%s\n' "${BASH_REMATCH[5]:-${BASH_REMATCH[6]:-}}"
+    else
+        printf '%s\n' "$default"
+    fi
 }
 
 # --- 从现有服务文件解析配置 ---
@@ -133,17 +136,34 @@ parse_existing_config() {
     local exec_line=$(grep "^ExecStart=" "${SERVICE_FILE}" | sed 's/^ExecStart=//')
 
     # 解析各参数
-    CURRENT_HTTP_SERVER=$(echo "$exec_line" | grep -oP '(?<=--http-server ")[^"]+' || echo "")
-    CURRENT_WS_SERVER=$(echo "$exec_line" | grep -oP '(?<=--ws-server ")[^"]+' || echo "")
-    CURRENT_TOKEN=$(echo "$exec_line" | grep -oP '(?<=--token ")[^"]+' || echo "")
-    CURRENT_FAKE=$(echo "$exec_line" | grep -oP '(?<=--fake ")[^"]+' || echo "1")
-    CURRENT_INTERVAL=$(echo "$exec_line" | grep -oP '(?<=--realtime-info-interval ")[^"]+' || echo "1000")
-    CURRENT_BILLING_DAY=$(echo "$exec_line" | grep -oP '(?<=--traffic-reset-day ")[^"]+' || echo "1")
+    CURRENT_HTTP_SERVER=$(get_option_value "$exec_line" 'endpoint|http-server')
+    CURRENT_WS_SERVER=$(get_option_value "$exec_line" ws-server)
+    CURRENT_TOKEN=$(get_option_value "$exec_line" token)
+    CURRENT_FAKE=$(get_option_value "$exec_line" fake 1)
+    CURRENT_INTERVAL=$(get_option_value "$exec_line" realtime-info-interval 1000)
+    local interval_seconds
+    interval_seconds=$(get_option_value "$exec_line" interval)
+    if [[ -n "$interval_seconds" ]]; then
+        CURRENT_INTERVAL=$(LC_ALL=C awk -v seconds="$interval_seconds" 'BEGIN { printf "%.0f", seconds * 1000 }')
+    fi
+    CURRENT_BILLING_DAY=$(get_option_value "$exec_line" traffic-reset-day 1)
+    CURRENT_NETWORK_SAVE_PATH=$(get_option_value "$exec_line" network-save-path)
+    if [[ -z "$CURRENT_NETWORK_SAVE_PATH" ]]; then
+        CURRENT_NETWORK_SAVE_PATH="$NETWORK_STATS_FILE"
+        if [[ ! -f "$NETWORK_STATS_FILE" && -f "${HOME:-/root}/.config/komari-network.conf" ]]; then
+            CURRENT_NETWORK_SAVE_PATH="${HOME:-/root}/.config/komari-network.conf"
+        fi
+    fi
 
     # 检查布尔标志
     [[ "$exec_line" == *"--tls"* ]] && CURRENT_TLS="true" || CURRENT_TLS="false"
     [[ "$exec_line" == *"--ignore-unsafe-cert"* ]] && CURRENT_IGNORE_CERT="true" || CURRENT_IGNORE_CERT="false"
-    [[ "$exec_line" == *"--terminal"* ]] && CURRENT_TERMINAL="true" || CURRENT_TERMINAL="false"
+    if [[ "$exec_line" =~ (^|[[:space:]])--terminal([[:space:]]|$) ]] &&
+       [[ ! "$exec_line" =~ (^|[[:space:]])--disable-web-ssh([[:space:]]|$) ]]; then
+        CURRENT_TERMINAL="true"
+    else
+        CURRENT_TERMINAL="false"
+    fi
 
     return 0
 }
@@ -180,6 +200,7 @@ create_service_file() {
     local tls_flag="$7"
     local ignore_cert_flag="$8"
     local terminal_flag="$9"
+    local network_save_path="${10:-$NETWORK_STATS_FILE}"
 
     # 构建启动命令
     local exec_cmd="${INSTALL_PATH} --http-server \"${http_server}\""
@@ -188,7 +209,9 @@ create_service_file() {
     exec_cmd="$exec_cmd --token \"${token}\""
     exec_cmd="$exec_cmd --fake \"${fake}\""
     exec_cmd="$exec_cmd --realtime-info-interval \"${interval}\""
+    exec_cmd="$exec_cmd --network-statistics-mode natural --traffic-period month"
     exec_cmd="$exec_cmd --traffic-reset-day \"${billing_day}\""
+    exec_cmd="$exec_cmd --network-save-path \"${network_save_path}\""
 
     [ "$tls_flag" = "true" ] && exec_cmd="$exec_cmd --tls"
     [ "$ignore_cert_flag" = "true" ] && exec_cmd="$exec_cmd --ignore-unsafe-cert"
@@ -231,6 +254,7 @@ interactive_config() {
         TLS_FLAG="${CURRENT_TLS}"
         IGNORE_CERT_FLAG="${CURRENT_IGNORE_CERT}"
         TERMINAL_FLAG="${CURRENT_TERMINAL}"
+        NETWORK_SAVE_PATH="${CURRENT_NETWORK_SAVE_PATH}"
     else
         HTTP_SERVER=""
         WS_SERVER=""
@@ -241,6 +265,7 @@ interactive_config() {
         TLS_FLAG="false"
         IGNORE_CERT_FLAG="false"
         TERMINAL_FLAG="false"
+        NETWORK_SAVE_PATH="$NETWORK_STATS_FILE"
     fi
 
     echo ""
@@ -264,9 +289,13 @@ interactive_config() {
         exit 1
     fi
 
-    # 计费日
-    read -p "计费日 (每月第几号) [${BILLING_DAY}]: " input
+    # 重置日当天服务器本地时间 00:00 开始新周期
+    read -p "流量重置日 (每月1-31号，当天本地时间00:00) [${BILLING_DAY}]: " input
     [ -n "$input" ] && BILLING_DAY="$input"
+    if [[ ! "$BILLING_DAY" =~ ^([1-9]|[12][0-9]|3[01])$ ]]; then
+        log_error "流量重置日必须为 1-31"
+        exit 1
+    fi
 
     # Terminal
     read -p "启用 Web Terminal? (y/N) [${TERMINAL_FLAG}]: " input
@@ -290,17 +319,42 @@ interactive_config() {
 }
 
 # --- 安装/升级 ---
+migrate_monthly_config() {
+    if ! check_service_exists; then
+        return
+    fi
+    local exec_line
+    exec_line=$(sed -n 's/^ExecStart=//p' "$SERVICE_FILE")
+    # Older manager versions wrote a reset day but accidentally left fixed mode
+    # enabled. Preserve explicitly configured modes and existing state paths.
+    if [[ -n "$(get_option_value "$exec_line" traffic-reset-day)" &&
+          -z "$(get_option_value "$exec_line" network-statistics-mode)" ]]; then
+        local options=' --network-statistics-mode natural'
+        if [[ -z "$(get_option_value "$exec_line" traffic-period)" ]]; then
+            options+=' --traffic-period month'
+        fi
+        sed -i "/^ExecStart=/s/\$/${options}/" "$SERVICE_FILE"
+        systemctl daemon-reload
+        log_info "已修正旧配置：按服务器本地时间的每月重置日统计流量"
+    fi
+}
+
 do_install() {
     local upgrade_only="${1:-false}"
     local use_proxy="${2:-}"
     local proxy_url="${3:-https://ghfast.top}"
 
-    log_step "开始${upgrade_only:+升级}${upgrade_only:-安装} Komari Monitor RS..."
+    if [[ "$upgrade_only" == true ]]; then
+        log_step "开始升级 Komari Monitor RS..."
+    else
+        log_step "开始安装 Komari Monitor RS..."
+    fi
 
     install_dependencies
 
     # 检测架构并构建下载URL
-    local arch_file=$(get_arch)
+    local arch_file
+    arch_file=$(get_arch) || return 1
     # GitHub releases 最新版本下载格式: /releases/latest/download/{filename}
     local github_url="https://github.com/${GITHUB_REPO:-$DEFAULT_GITHUB_REPO}/releases/latest/download/${arch_file}"
     local download_url="$github_url"
@@ -313,12 +367,37 @@ do_install() {
     log_info "下载地址: ${download_url}"
 
     # 下载到临时文件
-    local temp_file=$(mktemp)
+    local temp_dir temp_file
+    temp_dir=$(mktemp -d)
+    temp_file="${temp_dir}/${arch_file}"
     if ! download_file "${download_url}" "${temp_file}"; then
         log_error "下载失败!"
-        rm -f "${temp_file}"
+        rm -rf "${temp_dir}"
         [ -z "$use_proxy" ] && log_warn "可尝试使用 --proxy 参数"
-        exit 1
+        return 1
+    fi
+
+    # Verify before stopping the existing service or replacing its executable.
+    if ! command -v sha256sum >/dev/null 2>&1 ||
+       ! download_file "${download_url%/*}/SHA256SUMS" "${temp_dir}/SHA256SUMS"; then
+        log_error "无法校验下载文件，请确认已安装 sha256sum 且 Release 包含 SHA256SUMS"
+        rm -rf "${temp_dir}"
+        return 1
+    fi
+    local expected actual
+    expected=$(awk -v name="$arch_file" '$2 == name { print $1 }' "${temp_dir}/SHA256SUMS")
+    actual=$(sha256sum "$temp_file" | cut -d ' ' -f 1)
+    if [[ -z "$expected" || "$actual" != "$expected" ]]; then
+        log_error "SHA256 校验失败，保留现有程序和服务"
+        rm -rf "${temp_dir}"
+        return 1
+    fi
+    chmod +x "$temp_file"
+    local version
+    if ! version=$("$temp_file" --version 2>/dev/null) || [[ "$version" != "komari-monitor-rs "* ]]; then
+        log_error "安装包无法在此系统运行，请检查架构和 glibc 版本"
+        rm -rf "${temp_dir}"
+        return 1
     fi
 
     # 如果服务正在运行，先停止
@@ -337,7 +416,9 @@ do_install() {
     # 安装新版本
     mv "${temp_file}" "${INSTALL_PATH}"
     chmod +x "${INSTALL_PATH}"
-    log_info "程序已安装到: ${INSTALL_PATH}"
+    rm -rf "${temp_dir}"
+    migrate_monthly_config
+    log_info "${version} 已安装到: ${INSTALL_PATH}"
 }
 
 # --- 卸载 ---
@@ -465,7 +546,7 @@ do_config() {
     # 保存配置
     create_service_file "$HTTP_SERVER" "$WS_SERVER" "$TOKEN" \
         "$FAKE" "$INTERVAL" "$BILLING_DAY" \
-        "$TLS_FLAG" "$IGNORE_CERT_FLAG" "$TERMINAL_FLAG"
+        "$TLS_FLAG" "$IGNORE_CERT_FLAG" "$TERMINAL_FLAG" "$NETWORK_SAVE_PATH"
 
     # 询问是否重启
     if check_installed; then
@@ -554,7 +635,7 @@ main() {
                 interactive_config false
                 create_service_file "$HTTP_SERVER" "$WS_SERVER" "$TOKEN" \
                     "$FAKE" "$INTERVAL" "$BILLING_DAY" \
-                    "$TLS_FLAG" "$IGNORE_CERT_FLAG" "$TERMINAL_FLAG"
+                    "$TLS_FLAG" "$IGNORE_CERT_FLAG" "$TERMINAL_FLAG" "$NETWORK_SAVE_PATH"
             fi
             systemctl enable ${SERVICE_NAME} >/dev/null 2>&1
             systemctl restart ${SERVICE_NAME}
@@ -605,4 +686,6 @@ main() {
     esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

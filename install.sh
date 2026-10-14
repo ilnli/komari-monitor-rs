@@ -1,4 +1,4 @@
 #!/bin/bash
 
-echo "本脚本已不再支持，该项目不面向小白用户，请自行配置"
-echo "请移步 https://github.com/GenshinMinecraft/komari-monitor-rs 获取更多信息"
+echo "此旧入口已停用，请使用 komari-manager.sh install 安装或 upgrade 升级。"
+echo "下载和使用说明：https://github.com/ilnli/komari-monitor-rs#管理脚本"

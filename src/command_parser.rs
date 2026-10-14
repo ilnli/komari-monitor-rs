@@ -1,6 +1,6 @@
 use log::{error, info};
-use palc::{Parser, ValueEnum};
 use miniserde::{Deserialize, Serialize};
+use palc::{Parser, ValueEnum};
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -9,12 +9,16 @@ use std::{env, fs};
 #[command(
     version,
     long_about = "komari-monitor-rs is a third-party high-performance monitoring agent for the komari monitoring service.",
-    after_long_help = "Must set --http-server / --token\n--ip-provider accepts cloudflare / ipinfo\n--log-level accepts error, warn, info, debug, trace\n\nThis Agent is open-sourced on Github, powered by powerful Rust. Love from Komari"
+    after_long_help = "Must set --endpoint / --token\n--endpoint is also accepted as --http-server\n--ip-provider accepts cloudflare / ipinfo\n--log-level accepts error, warn, info, debug, trace\n\nThis Agent is open-sourced on Github, powered by powerful Rust. Love from Komari"
 )]
 pub struct Args {
+    /// Print version
+    #[arg(short = 'V', long)]
+    pub version: bool,
+
     // Main
-    /// Set Main Server Http Address
-    #[arg(long)]
+    /// Set Main Server endpoint address (alias: --endpoint)
+    #[arg(long, alias = "endpoint")]
     pub http_server: Option<String>,
 
     /// Set Main Server WebSocket Address
@@ -29,7 +33,7 @@ pub struct Args {
     #[arg(short, long, default_value_t = 1.0)]
     pub fake: f64,
 
-    /// Enable TLS (default disabled)
+    /// Legacy TLS flag (HTTPS/WSS enable TLS automatically)
     #[arg(long, default_value_t = false)]
     pub tls: bool,
 
@@ -54,13 +58,45 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub terminal: bool,
 
+    /// Disable remote command and terminal handling
+    #[arg(long, default_value_t = false)]
+    pub disable_web_ssh: bool,
+
     /// Custom Terminal Entry
     #[arg(long, default_value_t = terminal_entry())]
     pub terminal_entry: String,
 
-    /// Set Real-Time Info Upload Interval (ms)
+    /// Set Real-Time Info Upload Interval (ms) (legacy option)
     #[arg(long, default_value_t = 1000)]
     pub realtime_info_interval: u64,
+
+    /// Set Real-Time Info Upload Interval (seconds)
+    #[arg(long)]
+    pub interval: Option<f64>,
+
+    /// Set Basic Info Upload Interval (minutes)
+    #[arg(long, default_value_t = 5)]
+    pub info_report_interval: u64,
+
+    /// WebSocket reconnect interval (seconds)
+    #[arg(long, default_value_t = 5)]
+    pub reconnect_interval: u64,
+
+    /// Maximum initial WebSocket retries before fallback
+    #[arg(long, default_value_t = 3)]
+    pub max_retries: u32,
+
+    /// Compatibility flag; transport compression is currently always disabled
+    #[arg(long, default_value_t = false)]
+    pub disable_compression: bool,
+
+    /// Disable automatic updates (reserved for compatibility)
+    #[arg(long, default_value_t = false)]
+    pub disable_auto_update: bool,
+
+    /// Compatibility flag; available-memory accounting is not implemented
+    #[arg(long, default_value_t = false)]
+    pub memory_mode_available: bool,
 
     /// Disable Windows Toast Notification (Only Windows)
     #[arg(long, default_value_t = false)]
@@ -89,7 +125,7 @@ pub struct Args {
     \t  Duration for one cycle of network statistics in seconds."]
     #[arg(long, default_value_t = 864000)] // 10 days
     pub network_duration: u32,
-    
+
     /// Number of intervals to save network statistics to disk.
     #[arg(long, default_value_t = 6)]
     pub network_interval_number: u32,
@@ -121,6 +157,10 @@ pub struct NetworkConfig {
 impl Args {
     pub fn par() -> Self {
         let mut args = Self::parse();
+        if args.version {
+            println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
         if args.terminal_entry == "default" {
             args.terminal_entry = {
                 if cfg!(windows) {
@@ -132,6 +172,14 @@ impl Args {
                 }
             };
         }
+        if let Some(interval) = args.interval {
+            if interval.is_finite() && interval > 0.0 {
+                args.realtime_info_interval = (interval * 1000.0) as u64;
+            }
+        }
+        if args.disable_web_ssh {
+            args.terminal = false;
+        }
         args
     }
     pub fn network_config(&self) -> NetworkConfig {
@@ -142,6 +190,9 @@ impl Args {
                         .to_string_lossy()
                         .to_string()
                 } else {
+                    #[cfg(target_os = "linux")]
+                    let is_root = unsafe { libc::geteuid() == 0 };
+                    #[cfg(not(target_os = "linux"))]
                     let is_root = env::var("EUID")
                         .unwrap_or("999".to_string())
                         .parse::<i32>()
@@ -153,7 +204,15 @@ impl Args {
                             .unwrap_or(999)
                             == 0;
                     let path = if is_root {
-                        PathBuf::from("/etc/komari-network.conf")
+                        let default_path = PathBuf::from("/etc/komari-network.conf");
+                        // Old systemd launches often lacked exported UID/EUID and
+                        // saved root's statistics under HOME. Keep that state.
+                        let legacy_path = env::var("HOME")
+                            .ok()
+                            .map(|home| PathBuf::from(home).join(".config/komari-network.conf"));
+                        legacy_path
+                            .filter(|path| !default_path.exists() && path.exists())
+                            .unwrap_or(default_path)
                             .to_string_lossy()
                             .to_string()
                     } else {
@@ -164,10 +223,14 @@ impl Args {
                             String::from("")
                         });
 
-                        PathBuf::from(home)
-                            .join(".config/komari-network.conf")
-                            .to_string_lossy()
-                            .to_string()
+                        if home.is_empty() {
+                            String::new()
+                        } else {
+                            PathBuf::from(home)
+                                .join(".config/komari-network.conf")
+                                .to_string_lossy()
+                                .to_string()
+                        }
                     };
                     info!(
                         "Automatically determined Network Config save path: {}",
@@ -184,13 +247,7 @@ impl Args {
             }
         };
 
-        let disable_network_statistics = if self.disable_network_statistics {
-            true
-        } else if !self.disable_network_statistics && path.is_empty() {
-            false
-        } else {
-            false
-        };
+        let disable_network_statistics = self.disable_network_statistics || path.is_empty();
 
         NetworkConfig {
             disable_network_statistics,
@@ -217,8 +274,8 @@ impl Display for Args {
             writeln!(f, "  WebSocket Server: {}", ws_server)?;
         }
 
-        if let Some(token) = &self.token {
-            writeln!(f, "  Token: {}", token)?;
+        if self.token.is_some() {
+            writeln!(f, "  Token: <REDACTED>")?;
         }
 
         if self.fake != 1.0 {
@@ -244,12 +301,34 @@ impl Display for Args {
             writeln!(f, "  Terminal Enabled: true")?;
             writeln!(f, "  Terminal Entry: {}", self.terminal_entry)?;
         }
+        if self.disable_web_ssh {
+            writeln!(f, "  Remote Control: disabled")?;
+        }
 
         writeln!(
             f,
             "  Real-time Info Interval: {} ms",
             self.realtime_info_interval
         )?;
+        if let Some(interval) = self.interval {
+            writeln!(f, "  Real-time Info Interval (CLI): {interval} s")?;
+        }
+        writeln!(
+            f,
+            "  Basic Info Interval: {} min",
+            self.info_report_interval
+        )?;
+        writeln!(f, "  Reconnect Interval: {} s", self.reconnect_interval)?;
+        writeln!(f, "  Max WebSocket Retries: {}", self.max_retries)?;
+        if self.disable_compression {
+            writeln!(f, "  Compression: disabled")?;
+        }
+        if self.disable_auto_update {
+            writeln!(f, "  Auto Update: disabled")?;
+        }
+        if self.memory_mode_available {
+            writeln!(f, "  Available-memory mode: not implemented (flag ignored)")?;
+        }
 
         writeln!(
             f,

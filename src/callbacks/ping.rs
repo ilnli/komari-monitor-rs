@@ -58,8 +58,24 @@ fn split_address(addr: &str) -> (String, u16) {
 }
 
 pub async fn ping_target(utf8_str: &str) -> Result<PingEventCallback, String> {
-    let ping_event: PingEvent =
-        miniserde::json::from_str(utf8_str).map_err(|_| "Failed to parse PingEvent".to_string())?;
+    let ping_event: PingEvent = match miniserde::json::from_str(utf8_str) {
+        Ok(value) => value,
+        Err(_) => {
+            let rpc: crate::protocol::IncomingRequest = miniserde::json::from_str(utf8_str)
+                .map_err(|_| "Failed to parse PingEvent".to_string())?;
+            let params = rpc
+                .params
+                .ok_or_else(|| "Failed to parse PingEvent params".to_string())?;
+            PingEvent {
+                message: rpc.method,
+                ping_task_id: params.ping_task_id.unwrap_or(0),
+                ping_type: params.ping_type.unwrap_or_default(),
+                ping_target: params.ping_target.unwrap_or_default(),
+            }
+        }
+    };
+
+    let _ = &ping_event.message;
 
     match ping_event.ping_type.as_str() {
         "icmp" => {
@@ -125,9 +141,16 @@ pub async fn ping_target(utf8_str: &str) -> Result<PingEventCallback, String> {
         }
         "http" => {
             let start_time = Instant::now();
+            let target = if ping_event.ping_target.starts_with("http://")
+                || ping_event.ping_target.starts_with("https://")
+            {
+                ping_event.ping_target.clone()
+            } else {
+                format!("http://{}", ping_event.ping_target)
+            };
 
             #[cfg(feature = "ureq-support")]
-            let result = ureq::get(&ping_event.ping_target) // Avoid cloning
+            let result = ureq::get(&target)
                 .header("User-Agent", "curl/11.45.14")
                 .call()
                 .is_ok();
@@ -136,9 +159,12 @@ pub async fn ping_target(utf8_str: &str) -> Result<PingEventCallback, String> {
             let result = {
                 use nyquest::Request;
                 let client = crate::utils::create_nyquest_client(false);
-                let request = Request::get(ping_event.ping_target);
+                let request = Request::get(target);
                 client.request(request).is_ok()
             };
+
+            #[cfg(not(any(feature = "ureq-support", feature = "nyquest-support")))]
+            let result = false;
 
             let now = OffsetDateTime::now_local().unwrap_or_else(|_| OffsetDateTime::now_utc());
             let finished_at = now.format(&Rfc3339).unwrap_or_default();

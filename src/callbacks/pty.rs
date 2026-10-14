@@ -15,12 +15,20 @@ pub struct TerminalEvent {
 }
 
 pub fn get_pty_ws_link(utf8_str: &str, ws_terminal_url: &str) -> Result<String, String> {
-    let ping_event: TerminalEvent = miniserde::json::from_str(utf8_str)
-        .map_err(|_| "Failed to parse TerminalEvent".to_string())?;
+    let request_id = match miniserde::json::from_str::<TerminalEvent>(utf8_str) {
+        Ok(event) => event.request_id,
+        Err(_) => {
+            let rpc: crate::protocol::IncomingRequest = miniserde::json::from_str(utf8_str)
+                .map_err(|_| "Failed to parse TerminalEvent".to_string())?;
+            rpc.params
+                .and_then(|params| params.request_id)
+                .ok_or_else(|| "Terminal request is missing request_id".to_string())?
+        }
+    };
 
     Ok(format!(
         "{ws_terminal_url}&id={request_id}",
-        request_id = ping_event.request_id
+        request_id = request_id
     ))
 }
 

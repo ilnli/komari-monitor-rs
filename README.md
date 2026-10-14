@@ -12,6 +12,31 @@ Agent
 
 ## 近期更新
 
+### 0.4.0：Komari v2 协议适配
+
+依据[官方 Agent 文档](https://komari-monitor.github.io/komari-document/dev/agent.html)及
+[Komari 1.5.1 协议定义](https://github.com/komari-monitor/komari/blob/1.5.1/protocol/v2/jsonrpc.go)，
+基础信息、实时监控、Ping 和命令结果统一使用 `/api/clients/v2/rpc` 的 JSON-RPC 2.0 协议。
+
+- 首选 WebSocket，连接失败达到 `--max-retries` 后使用 HTTP POST 上报；后台按 `--reconnect-interval` 尝试恢复 WebSocket。
+- HTTP 回退通过上报响应中的 `result.events` 接收任务，并在后续上报中确认；没有额外的 `agent.pull` 长轮询，任务接收速度取决于上报间隔。独立终端 WebSocket 在 HTTP 回退期间不可用。
+- 命令按任务 ID 去重并缓存最近 256 个结果，避免上传重试或连接切换重复执行。缓存位于内存，重启后不保留。
+- `--endpoint` 是 `--http-server` 的别名；`--interval` 使用秒（支持小数），优先于原有的毫秒参数 `--realtime-info-interval`。
+- 基础信息默认每 5 分钟更新，可用 `--info-report-interval` 调整；远程命令和终端仍需显式启用 `--terminal`，`--disable-web-ssh` 可强制关闭。
+
+编译和运行：
+
+```bash
+cargo build --release --features ureq-support --locked
+./target/release/komari-monitor-rs --endpoint https://komari.example.com --token YOUR_TOKEN --interval 1
+```
+
+HTTPS 地址会自动使用 WSS。现有 `--http-server` / `--ws-server` 配置仍然有效。
+本版本要求服务端支持 v2，不再使用旧版 v1 上报接口。
+
+协议测试：`cargo test --features ureq-support --locked`。集成测试启动本地 HTTP/WebSocket 模拟服务，
+验证回退、恢复、任务去重及结果回传；不需要真实服务端令牌。
+
 ### Windows Toast Notify
 
 由于安全性问题，现在默认情况下在 Windows 系统下运行时会发送 Windows 系统 Toast 通知，内容为:
@@ -44,7 +69,26 @@ eth0 | 00:22:48:58:ca:62 | UP: 0 GB / DOWN: 7 GB
 CONNS: TCP: 12 | UDP: 4
 ```
 
-### 已支持周期流量统计 / 清零
+### 周期流量累计与重置
+
+流量统计分别上报本周期累计上传和下载字节数，两者之和是本周期总用量。
+设置每月 15 号重置，表示 **服务器本地时间每月 15 日 00:00 开始新周期**，
+例如 10 月 15 日零点到 11 月 15 日零点前属于同一周期。若设置 31 号而该月不足 31 天，则使用当月最后一天。
+
+手动运行时，应同时指定自然月模式：
+
+```bash
+./komari-monitor-rs --endpoint https://komari.example.com --token YOUR_TOKEN \
+  --network-statistics-mode natural --traffic-period month --traffic-reset-day 15
+```
+
+仅传 `--traffic-reset-day` 不会改变默认的 `fixed` 模式。管理脚本会自动配置自然月模式；
+0.4.0 管理脚本升级时也会修正旧脚本遗漏模式参数的问题，显式配置的 `fixed` 模式保持不变。
+
+首次启用从零开始，无法回溯安装前的本周期流量；更改周期规则会开始新周期。
+Agent 重启保留同一周期的累计值，系统重启从最近保存的数据继续累计。
+默认每分钟保存一次，突然断电可能丢失尚未保存的部分；程序停机跨过重置日的流量无法精确补算。
+启动日志会输出下次重置时间，保存失败也会明确记录。
 
 相关参数:
 
@@ -62,7 +106,7 @@ CONNS: TCP: 12 | UDP: 4
               清零周期是一月时，可选 1...31, 对应在下月的1...31日重置。  
               清零周期是一年时，格式为12/31，对应在下年的12/31日重置。  
 
-该功能暂未稳定，有问题请及时反馈
+0.4.0 修复了首次计数、跨周期重启、采样配置变更影响周期，以及自然日期按服务器本地时间重置的问题。
 
 ## 管理脚本
 
@@ -85,7 +129,7 @@ sudo ./komari-manager.sh install
 # 使用代理安装 (中国大陆用户)
 sudo ./komari-manager.sh install --proxy
 
-# 升级到最新版本 (保留配置)
+# 升级前请先重新下载上面的管理脚本；升级会保留配置并修正旧版的流量周期参数
 sudo ./komari-manager.sh upgrade
 
 # 修改配置
@@ -109,9 +153,12 @@ sudo ./komari-manager.sh uninstall
 
 ## 与原版的差异
 
-目前，本项目已经实现原版的大部分功能，但还有以下的差异:
+当前支持基础监控、Ping、远程命令和终端；以下官方功能尚未实现：
 
-- GPU Name 检测
+- GPU 信息检测
+- 文件管理、远程启动参数管理和版本切换
+- gzip 传输压缩（目前始终发送未压缩 JSON，服务端支持；`--disable-compression` 为兼容参数）
+- `--memory-mode-available` 内存统计模式（仅接受参数，不改变统计方式）
 
 除此之外，还有希望添加的功能:
 
@@ -121,7 +168,12 @@ sudo ./komari-manager.sh uninstall
 
 ## 下载
 
-在本项目的 [Release 界面](https://github.com/GenshinMinecraft/komari-monitor-rs/releases/tag/latest) 即可下载，按照架构选择即可
+在本仓库的 [Release 界面](https://github.com/ilnli/komari-monitor-rs/releases/tag/latest) 即可下载，按照架构选择即可。
+当前自动构建 Linux x86_64/aarch64 GNU、Windows x86_64 和 macOS arm64；管理脚本仅支持对应的 Linux 架构，
+下载后会检查 `SHA256SUMS` 和程序可运行性，验证通过才停止旧服务。
+
+发布流程为推送 `main` → 两种 HTTP 后端测试与管理脚本测试 → 四个平台构建 → 统一更新滚动 `latest` Release。
+其他分支和 PR 只测试、构建，不发布。Nix 包版本自动读取 `Cargo.toml`。
 
 后缀有 `musl` 字样的可以在任何 Linux 系统下运行
 
@@ -136,7 +188,7 @@ Usage: komari-monitor-rs [OPTIONS]
 
 Options:
       --http-server <HTTP_SERVER>
-          Set Main Server Http Address
+          Set Main Server endpoint address (alias: --endpoint)
 
       --ws-server <WS_SERVER>
           Set Main Server WebSocket Address
@@ -149,7 +201,7 @@ Options:
           [default: 1]
 
       --tls
-          Enable TLS (default disabled)
+          Legacy TLS flag (HTTPS/WSS enable TLS automatically)
           [default: false]
 
       --ignore-unsafe-cert
@@ -177,8 +229,15 @@ Options:
           [default: default]
 
       --realtime-info-interval <REALTIME_INFO_INTERVAL>
-          Set Real-Time Info Upload Interval (ms)
+          Set Real-Time Info Upload Interval (ms) (legacy option)
           [default: 1000]
+
+      --interval <INTERVAL>
+          Set Real-Time Info Upload Interval (seconds)
+
+      --info-report-interval <INFO_REPORT_INTERVAL>
+          Set Basic Info Upload Interval (minutes)
+          [default: 5]
 
       --disable-toast-notify
           Disable Windows Toast Notification (Only Windows)
@@ -222,7 +281,7 @@ Options:
           [default: 1]
 ```
 
-必须设置 `--http-server` / `--token`
+必须设置 `--endpoint`（或兼容的 `--http-server`）/ `--token`。Agent 使用 v2 JSON-RPC，主通道为 `/api/clients/v2/rpc`。
 `--ip-provider` 接受 `cloudflare` / `ipinfo`
 `--log-level` 接受 `error`, `warn`, `info`, `debug`, `trace`
 
@@ -239,7 +298,7 @@ Options:
   inputs = {
     nixpkgs.url = "nixpkgs/nixos-unstable";
     komari-monitor-rs = {
-      url = "github:GenshinMinecraft/komari-monitor-rs";
+      url = "github:ilnli/komari-monitor-rs";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };

@@ -1,8 +1,23 @@
+use crate::protocol::{self, TaskResultParams};
+use crate::utils::post_json_async;
 use miniserde::{Deserialize, Serialize, json};
+use std::collections::{HashSet, VecDeque};
 use std::process::Stdio;
+use std::sync::Arc;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::process::Command;
+use tokio::sync::Mutex;
+
+/// Shared across HTTP and WebSocket, including reconnects. Retain completed
+/// results so a delivery retry never needs to rerun a recent command.
+#[derive(Default)]
+pub struct ExecCache {
+    running: HashSet<String>,
+    completed: VecDeque<(String, String)>,
+}
+
+pub type SharedExecCache = Arc<Mutex<ExecCache>>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RemoteExec {
@@ -24,14 +39,77 @@ pub async fn exec_command(
     utf8_str: &str,
     callback_url: String,
     ignore_unsafe_cert: &bool,
+    cache: &SharedExecCache,
 ) -> Result<(), String> {
-    let remote_exec: RemoteExec =
-        json::from_str(utf8_str).map_err(|_| "Failed to parse RemoteExec".to_string())?;
+    let remote_exec: RemoteExec = match json::from_str(utf8_str) {
+        Ok(value) => value,
+        Err(_) => {
+            let rpc: crate::protocol::IncomingRequest =
+                json::from_str(utf8_str).map_err(|_| "Failed to parse RemoteExec".to_string())?;
+            let params = rpc
+                .params
+                .ok_or_else(|| "Failed to parse RemoteExec params".to_string())?;
+            RemoteExec {
+                message: rpc.method,
+                task_id: params.task_id.unwrap_or_default(),
+                command: params.command.unwrap_or_default(),
+            }
+        }
+    };
 
+    if remote_exec.task_id.is_empty() || remote_exec.command.is_empty() {
+        return Err("Exec request is missing task_id or command".into());
+    }
+    let task_id = remote_exec.task_id.clone();
+    let cached = {
+        let mut cache = cache.lock().await;
+        if let Some((_, result)) = cache.completed.iter().find(|(id, _)| id == &task_id) {
+            Some(result.clone())
+        } else if cache.running.insert(task_id.clone()) {
+            None
+        } else {
+            return Err(format!("Task {task_id} is already running"));
+        }
+    };
+    let payload = if let Some(payload) = cached {
+        payload
+    } else {
+        let result = execute(remote_exec).await;
+        let mut cache = cache.lock().await;
+        cache.running.remove(&task_id);
+        let payload = result?;
+        cache.completed.push_back((task_id, payload.clone()));
+        while cache.completed.len() > 256 {
+            cache.completed.pop_front();
+        }
+        payload
+    };
+    post_json_async(callback_url, payload, *ignore_unsafe_cert)
+        .await
+        .map(|_| ())
+}
+
+async fn execute(remote_exec: RemoteExec) -> Result<String, String> {
     let exec = tokio::spawn(async move {
-        let Ok(child) = Command::new("bash")
-            .arg("-c")
-            .arg(&remote_exec.command) // Avoid cloning
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &remote_exec.command,
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.arg("-c").arg(&remote_exec.command);
+            command
+        };
+
+        let Ok(child) = command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -65,38 +143,10 @@ pub async fn exec_command(
         finished_at,
     };
 
-    let json_string = json::to_string(&reply);
-    #[cfg(feature = "ureq-support")]
-    {
-        use crate::utils::create_ureq_agent;
-        let agent = create_ureq_agent(*ignore_unsafe_cert);
-        if let Ok(req) = agent.post(callback_url).send(&json_string) {
-            if req.status().is_success() {
-                Ok(())
-            } else {
-                Err("server returned a error".to_string())
-            }
-        } else {
-            Err("Unable to connect server".to_string())
-        }
-    }
-
-    #[cfg(feature = "nyquest-support")]
-    {
-        use nyquest::Body;
-        use nyquest::Request;
-        let client = crate::utils::create_nyquest_client(*ignore_unsafe_cert);
-        let body = Body::text(json_string, "application/json");
-        let request = Request::post(callback_url).with_body(body);
-
-        if let Ok(res) = client.request(request) {
-            if res.status().is_successful() {
-                Ok(())
-            } else {
-                Err("server returned a error".to_string())
-            }
-        } else {
-            Err("Unable to connect server".to_string())
-        }
-    }
+    Ok(protocol::task_result(TaskResultParams {
+        task_id: reply.task_id,
+        result: reply.result,
+        exit_code: reply.exit_code,
+        finished_at: reply.finished_at,
+    }))
 }

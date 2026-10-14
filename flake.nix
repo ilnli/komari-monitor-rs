@@ -13,7 +13,7 @@
         packages = let
           p = {
             pname = "komari-monitor-rs";
-            version = "0.2.7";
+            version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
             cargoBuildType = "minimal";
@@ -65,7 +65,7 @@
                   type = types.nullOr (types.attrsOf types.unspecified);
                   default = null;
                   description = ''
-                    configuration for komari-monitor-rs, `http-server` and `token` must be specified,
+                    configuration for komari-monitor-rs, `endpoint` (or `http-server`) and `token` must be specified,
                     key is the long name of the available parameters for komari-monitor-rs, except for `--help` and `--version`, and does not have a `--` prefix.
                     value is the value of the parameter, if the parameter is a flag (eg. `--tls`), then it's value is a boolean value.
                     see <https://github.com/GenshinMinecraft/komari-monitor-rs#usage> for supported options.
@@ -90,10 +90,11 @@
               config = mkIf cfg.enable {
                 assertions = [{
                   assertion = (cfg.settings != null)
-                    && (cfg.settings.http-server != null)
-                    && (cfg.settings.token != null);
+                    && ((cfg.settings.endpoint or null) != null
+                      || (cfg.settings.http-server or null) != null)
+                    && ((cfg.settings.token or null) != null);
                   message =
-                    "Both `settings.http-server` and `settings.token` should be specified for komari-monitor-rs.";
+                    "Specify `settings.endpoint` (or `settings.http-server`) and `settings.token` for komari-monitor-rs.";
                 }];
                 systemd.services.komari-monitor-rs = {
                   description = "Komari Monitor RS Service";

@@ -7,7 +7,7 @@ use crate::get_info::mem::{mem_info_without_usage, realtime_disk, realtime_mem, 
 use crate::get_info::network::{realtime_connections, realtime_network};
 use crate::get_info::os::os;
 use crate::get_info::{realtime_process, realtime_uptime};
-use log::{debug, error, info};
+use log::debug;
 use miniserde::{Deserialize, Serialize};
 use sysinfo::{Disks, Networks};
 
@@ -15,6 +15,8 @@ use sysinfo::{Disks, Networks};
 pub struct BasicInfo {
     pub arch: String,
     pub cpu_cores: u64,
+    /// Physical core count; zero means unavailable.
+    pub cpu_physical_cores: u64,
     pub cpu_name: String,
     pub gpu_name: String, // Not supported yet
 
@@ -38,6 +40,8 @@ impl BasicInfo {
         let (ip, os) = tokio::join!(ip(ip_provider), os());
 
         let fake_cpu_cores = (f64::from(cpu.cores) * fake) as u64;
+        let physical_cpu_cores =
+            (sysinfo::System::physical_core_count().unwrap_or(0) as f64 * fake) as u64;
         let fake_disk_total = (mem_disk.disk as f64 * fake) as u64;
         let fake_swap_total = (mem_disk.swap as f64 * fake) as u64;
         let fake_mem_total = (mem_disk.mem as f64 * fake) as u64;
@@ -45,6 +49,7 @@ impl BasicInfo {
         let basic_info = Self {
             arch: arch(),
             cpu_cores: fake_cpu_cores,
+            cpu_physical_cores: physical_cpu_cores,
             cpu_name: cpu.name,
             gpu_name: String::new(),
             disk_total: fake_disk_total,
@@ -61,61 +66,6 @@ impl BasicInfo {
         debug!("Basic Info successfully retrieved: {basic_info:?}");
 
         basic_info
-    }
-
-    pub fn push(&self, basic_info_url: String, ignore_unsafe_cert: bool) {
-        let json_string = miniserde::json::to_string(self);
-        #[cfg(feature = "ureq-support")]
-        {
-            use crate::utils::create_ureq_agent;
-            let agent = create_ureq_agent(ignore_unsafe_cert);
-            let resp = agent
-                .post(basic_info_url)
-                .header("User-Agent", "curl/11.45.14-rs")
-                .send(&json_string);
-
-            let resp = match resp {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!("Failed to push Basic Info: {e}");
-                    return;
-                }
-            };
-
-            if resp.status().is_success() {
-                info!("Successfully pushed Basic Info");
-            } else {
-                error!(
-                    "Failed to push Basic Info, HTTP status code: {}",
-                    resp.status()
-                );
-            }
-        }
-        #[cfg(feature = "nyquest-support")]
-        {
-            use nyquest::Body;
-            use nyquest::Request;
-            let client = crate::utils::create_nyquest_client(ignore_unsafe_cert);
-            let body = Body::text(json_string, "application/json");
-            let resp = client.request(Request::post(basic_info_url).with_body(body));
-
-            let resp = match resp {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!("Failed to push Basic Info: {e}");
-                    return;
-                }
-            };
-
-            if resp.status().is_successful() {
-                info!("Successfully pushed Basic Info");
-            } else {
-                error!(
-                    "Failed to push Basic Info, HTTP status code: {}",
-                    resp.status()
-                );
-            }
-        }
     }
 }
 

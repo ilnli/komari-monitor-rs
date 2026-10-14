@@ -5,7 +5,7 @@ use std::fs;
 use std::time::Duration;
 use sysinfo::Networks;
 use time::format_description::well_known::Rfc3339;
-use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
+use time::{Date, Month, OffsetDateTime, UtcOffset, Weekday};
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
@@ -25,6 +25,20 @@ struct NetworkInfo {
 }
 
 impl NetworkInfo {
+    fn update_totals(&mut self, current_tx: u64, current_rx: u64) {
+        // Kernel counters can restart when an interface is recreated, even if
+        // the host did not reboot. Rebase without losing the saved cycle or
+        // counting unaffected interfaces' lifetime traffic a second time.
+        if (current_tx as i64) < self.cycle_total_tx as i64 - self.offset_tx {
+            self.offset_tx = self.cycle_total_tx as i64 - current_tx as i64;
+        }
+        if (current_rx as i64) < self.cycle_total_rx as i64 - self.offset_rx {
+            self.offset_rx = self.cycle_total_rx as i64 - current_rx as i64;
+        }
+        self.cycle_total_tx = (current_tx as i64 + self.offset_tx).max(0) as u64;
+        self.cycle_total_rx = (current_rx as i64 + self.offset_rx).max(0) as u64;
+    }
+
     pub fn encode(&self) -> String {
         let mut output = String::new();
         // Helper macro
@@ -41,7 +55,10 @@ impl NetworkInfo {
         );
         append_line!("network_interval", self.config.network_interval);
         append_line!("network_save_path", &self.config.network_save_path);
-        append_line!("traffic_period", format!("{:?}", self.config.traffic_period));
+        append_line!(
+            "traffic_period",
+            format!("{:?}", self.config.traffic_period)
+        );
         append_line!("traffic_reset_day", &self.config.traffic_reset_day);
         append_line!(
             "network_statistics_mode",
@@ -141,8 +158,7 @@ impl NetworkInfo {
                     cycle_total_rx = Some(value.parse::<u64>().map_err(|_| parse_err("u64"))?)
                 }
                 "next_reset_timestamp" => {
-                    next_reset_timestamp =
-                        Some(value.parse::<i64>().map_err(|_| parse_err("i64"))?)
+                    next_reset_timestamp = Some(value.parse::<i64>().map_err(|_| parse_err("i64"))?)
                 }
                 "offset_tx" => offset_tx = value.parse::<i64>().map_err(|_| parse_err("i64"))?,
                 "offset_rx" => offset_rx = value.parse::<i64>().map_err(|_| parse_err("i64"))?,
@@ -156,8 +172,7 @@ impl NetworkInfo {
                 disable_network_statistics: disable_network_statistics
                     .ok_or("Missing field: disable_network_statistics")?,
                 network_interval: network_interval.ok_or("Missing field: network_interval")?,
-                network_save_path: network_save_path
-                    .ok_or("Missing field: network_save_path")?,
+                network_save_path: network_save_path.ok_or("Missing field: network_save_path")?,
                 traffic_period: traffic_period.unwrap_or(TrafficPeriod::Month),
                 traffic_reset_day: traffic_reset_day.unwrap_or_else(|| "1".to_string()),
                 network_statistics_mode: network_statistics_mode
@@ -177,33 +192,45 @@ impl NetworkInfo {
 }
 
 /// Main entry point for the network statistics persistence thread.
-pub async fn network_saver(network_config: &NetworkConfig) {
+pub async fn network_saver(
+    network_config: &NetworkConfig,
+    ready: tokio::sync::oneshot::Sender<()>,
+) {
     if network_config.disable_network_statistics {
         return;
     }
 
+    let mut ready = Some(ready);
     let mut networks = Networks::new_with_refreshed_list();
 
     loop {
         // Initialize state, handles file creation, migration, and reset logic
-        let (mut file, mut network_info) =
-            match initialize_network_state_and_offset(network_config, &mut networks).await {
-                Ok(state) => state,
-                Err(e) => {
-                    error!("Failed to initialize network statistics: {}. This feature will be disabled.", e);
-                    return;
-                }
-            };
+        let (mut file, mut network_info) = match initialize_network_state_and_offset(
+            network_config,
+            &mut networks,
+        )
+        .await
+        {
+            Ok(state) => state,
+            Err(e) => {
+                error!(
+                    "Failed to initialize network statistics: {}. This feature will be disabled.",
+                    e
+                );
+                return;
+            }
+        };
 
-        // The offset for the current session is now stored in the network_info struct.
-        let offset_tx = network_info.offset_tx;
-        let offset_rx = network_info.offset_rx;
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
         info!(
             "Network statistics cycle started. Next reset on: {}",
-            OffsetDateTime::from_unix_timestamp(network_info.next_reset_timestamp)
-                .unwrap()
-                .format(&Rfc3339)
-                .unwrap()
+            server_local_time(
+                OffsetDateTime::from_unix_timestamp(network_info.next_reset_timestamp).unwrap()
+            )
+            .map(|reset| reset.format(&Rfc3339).unwrap())
+            .unwrap_or_else(|e| format!("Unix {} ({e})", network_info.next_reset_timestamp))
         );
 
         // Add a counter to accumulate memory update times
@@ -211,8 +238,13 @@ pub async fn network_saver(network_config: &NetworkConfig) {
 
         // Main loop for the current cycle
         loop {
+            // Wake at the boundary even when the persistence sampling interval
+            // is longer, so the previous cycle is not reported after midnight.
+            let until_reset = (network_info.next_reset_timestamp
+                - OffsetDateTime::now_utc().unix_timestamp())
+            .max(0) as u64;
             tokio::time::sleep(Duration::from_secs(
-                network_config.network_interval as u64,
+                u64::from(network_config.network_interval).min(until_reset),
             ))
             .await;
 
@@ -225,9 +257,8 @@ pub async fn network_saver(network_config: &NetworkConfig) {
             networks.refresh(true);
             let (_, _, current_total_tx, current_total_rx) = filter_network(&networks);
 
-            // Update the live total traffic value using the constant offset for this cycle
-            network_info.cycle_total_tx = (current_total_tx as i64 + offset_tx).max(0) as u64;
-            network_info.cycle_total_rx = (current_total_rx as i64 + offset_rx).max(0) as u64;
+            network_info.update_totals(current_total_tx, current_total_rx);
+            update_traffic_offset(network_info.offset_tx, network_info.offset_rx);
 
             memory_update_count += 1;
             if memory_update_count >= network_config.network_interval_number {
@@ -239,7 +270,7 @@ pub async fn network_saver(network_config: &NetworkConfig) {
                     info!("Network statistics saved.");
                 }
                 memory_update_count = 0;
-            }      
+            }
         }
     }
 }
@@ -272,11 +303,38 @@ async fn initialize_network_state_and_offset(
     };
 
     let mut raw_data = String::new();
-    file.read_to_string(&mut raw_data).await.map_err(|e| format!("Failed to read network state file: {e}"))?;
+    file.read_to_string(&mut raw_data)
+        .await
+        .map_err(|e| format!("Failed to read network state file: {e}"))?;
 
-    let now = OffsetDateTime::now_utc();
-    let new_boot_id = get_boot_id();
+    networks.refresh(true);
+    let (_, _, current_total_tx, current_total_rx) = filter_network(networks);
+    let network_info = initialize_network_info(
+        network_config,
+        &raw_data,
+        OffsetDateTime::now_utc(),
+        get_boot_id(),
+        current_total_tx,
+        current_total_rx,
+    )?;
 
+    // Publish the offset only after initialization has been saved successfully.
+    save_network_info(&mut file, &network_info)
+        .await
+        .map_err(|e| format!("Failed to save initial network state: {e}"))?;
+    update_traffic_offset(network_info.offset_tx, network_info.offset_rx);
+
+    Ok((file, network_info))
+}
+
+fn initialize_network_info(
+    network_config: &NetworkConfig,
+    raw_data: &str,
+    now: OffsetDateTime,
+    new_boot_id: String,
+    current_total_tx: u64,
+    current_total_rx: u64,
+) -> Result<NetworkInfo, String> {
     let mut network_info = if raw_data.is_empty() {
         info!("Creating new network statistics file.");
         let next_reset_timestamp = calculate_next_reset_timestamp(network_config, now)?;
@@ -286,7 +344,7 @@ async fn initialize_network_state_and_offset(
             cycle_total_tx: 0,
             cycle_total_rx: 0,
             next_reset_timestamp,
-            offset_tx: i64::MIN + 2,    // initial value for tx
+            offset_tx: i64::MIN + 2, // initial value for tx
             offset_rx: i64::MIN + 2,
         }
     } else if let Ok(info) = NetworkInfo::decode(&raw_data) {
@@ -294,13 +352,12 @@ async fn initialize_network_state_and_offset(
         info
     } else {
         warn!("Network statistics file is corrupted or in an old format. Creating a new one.");
-        let (old_tx, old_rx) =
-            if let Some((tx, rx)) = parse_old_format_for_migration(&raw_data) {
-                info!("Successfully migrated traffic data from old format.");
-                (tx, rx)
-            } else {
-                (0, 0)
-            };
+        let (old_tx, old_rx) = if let Some((tx, rx)) = parse_old_format_for_migration(&raw_data) {
+            info!("Successfully migrated traffic data from old format.");
+            (tx, rx)
+        } else {
+            (0, 0)
+        };
         let next_reset_timestamp = calculate_next_reset_timestamp(network_config, now)?;
         NetworkInfo {
             config: network_config.clone(),
@@ -313,70 +370,58 @@ async fn initialize_network_state_and_offset(
         }
     };
 
-    // 1. Check for configuration change
-    if &network_info.config != network_config {
-        warn!("Network configuration changed. Resetting statistics.");
-        network_info.next_reset_timestamp = calculate_next_reset_timestamp(network_config, now)?;
-        network_info.config = network_config.clone();
+    // Expire the saved cycle before applying new settings, otherwise a restart
+    // with changed settings can silently carry last month's traffic forward.
+    let old_config = &network_info.config;
+    let schedule_changed = old_config.network_statistics_mode
+        != network_config.network_statistics_mode
+        || match network_config.network_statistics_mode {
+            NetworkStatisticsMode::Fixed => {
+                old_config.network_duration != network_config.network_duration
+            }
+            NetworkStatisticsMode::Natural => {
+                old_config.traffic_period != network_config.traffic_period
+                    || old_config.traffic_reset_day != network_config.traffic_reset_day
+            }
+        };
+    if !schedule_changed && network_config.network_statistics_mode == NetworkStatisticsMode::Natural
+    {
+        let saved_reset = OffsetDateTime::from_unix_timestamp(network_info.next_reset_timestamp)
+            .map_err(|e| format!("Invalid saved reset timestamp: {e}"))?;
+        // Older versions saved natural boundaries at UTC midnight. Reinterpret
+        // that calendar date locally before checking expiry. A boundary already
+        // saved in local time is UTC midnight only when its offset is zero, in
+        // which case this conversion leaves it unchanged.
+        if saved_reset.time() == time::Time::MIDNIGHT {
+            network_info.next_reset_timestamp = local_midnight_timestamp(saved_reset.date())?;
+        }
     }
-
-    // 2. Check if the cycle has reset since the last run
-    if now.unix_timestamp() >= network_info.next_reset_timestamp {
-        info!("New statistics cycle detected. Resetting totals.");
+    let cycle_expired = now.unix_timestamp() >= network_info.next_reset_timestamp;
+    if cycle_expired || schedule_changed {
+        info!("Starting a new network statistics cycle.");
         network_info.cycle_total_tx = 0;
         network_info.cycle_total_rx = 0;
         network_info.next_reset_timestamp = calculate_next_reset_timestamp(network_config, now)?;
         network_info.offset_tx = i64::MIN;
         network_info.offset_rx = i64::MIN;
     }
+    network_info.config = network_config.clone();
 
-    // 3. Handle reboot: if boot ID changed, invalidate the offset from the file.
-    let is_reboot =
-        cfg!(target_os = "linux") && !new_boot_id.is_empty() && network_info.boot_id != new_boot_id;
-    if is_reboot {
-        info!("System reboot detected. Invalidating saved offset.");
-        network_info.offset_tx = i64::MIN + 1;
-        network_info.offset_rx = i64::MIN + 1;
-    }
-    network_info.boot_id = new_boot_id;
-
-    // 4. Calculate and set the initial offset for this session
-    networks.refresh(true);
-    let (_, _, current_total_tx, current_total_rx) = filter_network(networks);
-
-    if network_info.offset_tx == i64::MIN {
-        // Offset is invalid (due to reboot, new cycle, or new file) and must be recalculated.
-        let new_offset_tx = (network_info.cycle_total_tx as i64) - (current_total_tx as i64);
-        let new_offset_rx = (network_info.cycle_total_rx as i64) - (current_total_rx as i64);
-        info!("Recalculated network offset: tx={}, rx={}", new_offset_tx, new_offset_rx);
-        network_info.offset_tx = new_offset_tx;
-        network_info.offset_rx = new_offset_rx;
-    } else if network_info.offset_tx == (i64::MIN + 1) {
+    let is_reboot = !new_boot_id.is_empty() && network_info.boot_id != new_boot_id;
+    // A new cycle takes precedence over reboot recovery. Counters at startup
+    // cannot tell which side of a missed cycle boundary traffic belongs to.
+    if is_reboot && !cycle_expired && !schedule_changed {
+        info!("System reboot detected. Continuing the saved traffic cycle.");
         network_info.offset_tx = network_info.cycle_total_tx as i64;
         network_info.offset_rx = network_info.cycle_total_rx as i64;
-        info!("reboot in one statistics cycle, network offset: tx={}, rx={}", network_info.offset_tx, network_info.offset_rx);
-    } else if network_info.offset_tx == (i64::MIN + 2) {
-        if network_info.cycle_total_tx == 0 && network_info.cycle_total_rx == 0 { 
-            network_info.offset_tx = 0;
-            network_info.offset_rx = 0;
-        } else {
-            network_info.offset_tx = (network_info.cycle_total_tx as i64) - (current_total_tx as i64);
-            network_info.offset_rx = (network_info.cycle_total_rx as i64) - (current_total_rx as i64);
-        }
-        info!("initial statistics cycle, network offset: tx={}, rx={}", network_info.offset_tx, network_info.offset_rx);
-    } else {
-        // Offset from file is valid (program restart without reboot). Use it directly.
-        info!("Using existing network offset from file: tx={}, rx={}", network_info.offset_tx, network_info.offset_rx);
+    } else if network_info.offset_tx == i64::MIN || network_info.offset_tx == i64::MIN + 2 {
+        network_info.offset_tx = network_info.cycle_total_tx as i64 - current_total_tx as i64;
+        network_info.offset_rx = network_info.cycle_total_rx as i64 - current_total_rx as i64;
     }
+    network_info.boot_id = new_boot_id;
+    network_info.update_totals(current_total_tx, current_total_rx);
 
-    update_traffic_offset(network_info.offset_tx, network_info.offset_rx);
-
-    // 5. Save the potentially updated state (new boot_id, new cycle, and new offset)
-    save_network_info(&mut file, &network_info)
-        .await
-        .map_err(|e| format!("Failed to save initial network state: {e}"))?;
-
-    Ok((file, network_info))
+    Ok(network_info)
 }
 
 /// Calculates the timestamp of the next reset event based on the configuration.
@@ -389,7 +434,8 @@ fn calculate_next_reset_timestamp(
         return Ok(now.unix_timestamp() + i64::from(config.network_duration));
     }
 
-    // for natural mode
+    // Calendar boundaries are interpreted in the server's local timezone.
+    let now = server_local_time(now)?;
     let period = &config.traffic_period;
     let reset_day_str = &config.traffic_reset_day;
 
@@ -409,23 +455,29 @@ fn calculate_next_reset_timestamp(
                     return Err(format!(
                         "Invalid weekday '{}', must be 1-7 or mon-sun",
                         reset_day_str
-                    ))
+                    ));
                 }
             };
 
-            let mut days_to_add =
-                target_weekday.number_from_monday() as i64 - now.weekday().number_from_monday() as i64;
+            let mut days_to_add = target_weekday.number_from_monday() as i64
+                - now.weekday().number_from_monday() as i64;
             if days_to_add <= 0 {
                 days_to_add += 7;
             }
             next_reset_date = next_reset_date + time::Duration::days(days_to_add);
         }
         TrafficPeriod::Month => {
-            let reset_day = reset_day_str
-                .parse::<u8>()
-                .map_err(|_| format!("Invalid day of month '{}', must be a number 1-31", reset_day_str))?;
+            let reset_day = reset_day_str.parse::<u8>().map_err(|_| {
+                format!(
+                    "Invalid day of month '{}', must be a number 1-31",
+                    reset_day_str
+                )
+            })?;
             if !(1..=31).contains(&reset_day) {
-                return Err(format!("Invalid day of month '{}', must be 1-31", reset_day));
+                return Err(format!(
+                    "Invalid day of month '{}', must be 1-31",
+                    reset_day
+                ));
             }
 
             let mut target_date = now.date();
@@ -453,9 +505,14 @@ fn calculate_next_reset_timestamp(
                     reset_day_str
                 ));
             }
-            let month = parts[0].parse::<u8>().map_err(|_| format!("Invalid month in '{}'", reset_day_str))?;
-            let day = parts[1].parse::<u8>().map_err(|_| format!("Invalid day in '{}'", reset_day_str))?;
-            let month_enum = Month::try_from(month).map_err(|_| format!("Invalid month value '{}', must be 1-12", month))?;
+            let month = parts[0]
+                .parse::<u8>()
+                .map_err(|_| format!("Invalid month in '{}'", reset_day_str))?;
+            let day = parts[1]
+                .parse::<u8>()
+                .map_err(|_| format!("Invalid day in '{}'", reset_day_str))?;
+            let month_enum = Month::try_from(month)
+                .map_err(|_| format!("Invalid month value '{}', must be 1-12", month))?;
 
             let mut next_year = now.year();
             let reset_date_this_year = Date::from_calendar_date(next_year, month_enum, day)
@@ -464,21 +521,82 @@ fn calculate_next_reset_timestamp(
             if now.date() >= reset_date_this_year {
                 next_year += 1;
             }
-            next_reset_date = Date::from_calendar_date(next_year, month_enum, day).map_err(|e| {
-                format!("Invalid date '{}/{}' for year {}: {}", month, day, next_year, e)
-            })?;
+            next_reset_date =
+                Date::from_calendar_date(next_year, month_enum, day).map_err(|e| {
+                    format!(
+                        "Invalid date '{}/{}' for year {}: {}",
+                        month, day, next_year, e
+                    )
+                })?;
         }
     }
 
-    let next_reset_datetime = PrimitiveDateTime::new(next_reset_date, Time::MIDNIGHT);
-    Ok(next_reset_datetime.assume_offset(now.offset()).unix_timestamp())
+    local_midnight_timestamp(next_reset_date)
+}
+
+// time::UtcOffset::local_offset_at can reject Unix multi-threaded processes.
+// Linux libc's reentrant localtime_r and mktime resolve the host timezone and
+// its DST rules without changing process environment variables.
+fn server_local_time(now: OffsetDateTime) -> Result<OffsetDateTime, String> {
+    #[cfg(unix)]
+    let offset = {
+        let timestamp: libc::time_t = now
+            .unix_timestamp()
+            .try_into()
+            .map_err(|_| "Local time is outside the platform timestamp range")?;
+        let mut local: libc::tm = unsafe { std::mem::zeroed() };
+        if unsafe { libc::localtime_r(&timestamp, &mut local) }.is_null() {
+            return Err("Failed to resolve server local timezone".into());
+        }
+        UtcOffset::from_whole_seconds(
+            local
+                .tm_gmtoff
+                .try_into()
+                .map_err(|_| "Invalid server timezone offset")?,
+        )
+        .map_err(|e| format!("Invalid server timezone offset: {e}"))?
+    };
+    #[cfg(not(unix))]
+    let offset = UtcOffset::local_offset_at(now)
+        .map_err(|e| format!("Failed to resolve server local timezone: {e}"))?;
+    Ok(now.to_offset(offset))
+}
+
+fn local_midnight_timestamp(date: Date) -> Result<i64, String> {
+    #[cfg(unix)]
+    {
+        let mut local: libc::tm = unsafe { std::mem::zeroed() };
+        local.tm_year = date.year() - 1900;
+        local.tm_mon = i32::from(date.month() as u8) - 1;
+        local.tm_mday = i32::from(date.day());
+        local.tm_isdst = -1; // Let libc resolve DST for the target date.
+        let timestamp = unsafe { libc::mktime(&mut local) };
+        if timestamp == -1 {
+            return Err(format!("Failed to resolve local midnight for {date}"));
+        }
+        Ok(timestamp as i64)
+    }
+    #[cfg(not(unix))]
+    {
+        let midnight = date.midnight();
+        let offset = server_local_time(midnight.assume_utc())?.offset();
+        let offset = server_local_time(midnight.assume_offset(offset))?.offset();
+        Ok(midnight.assume_offset(offset).unix_timestamp())
+    }
 }
 
 /// Helper to get the number of days in a given month and year.
 fn days_in_month(year: i32, month: Month) -> u8 {
     let next_month = month.next();
-    let next_year = if next_month == Month::January { year + 1 } else { year };
-    let last_day = Date::from_calendar_date(next_year, next_month, 1).unwrap().previous_day().unwrap();
+    let next_year = if next_month == Month::January {
+        year + 1
+    } else {
+        year
+    };
+    let last_day = Date::from_calendar_date(next_year, next_month, 1)
+        .unwrap()
+        .previous_day()
+        .unwrap();
     last_day.day()
 }
 
@@ -525,8 +643,273 @@ fn parse_old_format_for_migration(input: &str) -> Option<(u64, u64)> {
 
     // We need at least source_tx and source_rx. latest_tx/rx can be 0 if not present.
     if let (Some(stx), Some(srx)) = (source_tx, source_rx) {
-        Some((stx , srx))
+        Some((stx, srx))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> NetworkConfig {
+        NetworkConfig {
+            disable_network_statistics: false,
+            network_interval: 60,
+            network_save_path: "unused".into(),
+            traffic_period: TrafficPeriod::Month,
+            traffic_reset_day: "15".into(),
+            network_statistics_mode: NetworkStatisticsMode::Natural,
+            network_duration: 864_000,
+            network_interval_number: 6,
+        }
+    }
+
+    fn date(month: Month, day: u8) -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(
+            local_midnight_timestamp(Date::from_calendar_date(2026, month, day).unwrap()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn saved(config: NetworkConfig) -> NetworkInfo {
+        NetworkInfo {
+            config,
+            boot_id: "boot-1".into(),
+            cycle_total_tx: 200,
+            cycle_total_rx: 400,
+            next_reset_timestamp: date(Month::October, 15).unix_timestamp(),
+            offset_tx: -1000,
+            offset_rx: -2000,
+        }
+    }
+
+    #[test]
+    fn first_install_excludes_traffic_before_tracking_started() {
+        let info = initialize_network_info(
+            &config(),
+            "",
+            date(Month::October, 14),
+            "boot-1".into(),
+            1200,
+            2400,
+        )
+        .unwrap();
+        assert_eq!((info.offset_tx, info.offset_rx), (-1200, -2400));
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (0, 0));
+    }
+
+    #[test]
+    fn sampling_settings_do_not_postpone_a_fixed_cycle() {
+        let mut old_config = config();
+        old_config.network_statistics_mode = NetworkStatisticsMode::Fixed;
+        let old = saved(old_config.clone());
+        let mut new_config = old_config;
+        new_config.network_interval = 30;
+        let info = initialize_network_info(
+            &new_config,
+            &old.encode(),
+            date(Month::October, 14),
+            "boot-1".into(),
+            1200,
+            2400,
+        )
+        .unwrap();
+        assert_eq!(
+            info.next_reset_timestamp,
+            date(Month::October, 15).unix_timestamp()
+        );
+    }
+
+    #[test]
+    fn config_change_does_not_skip_an_overdue_cycle() {
+        let old = saved(config());
+        let mut new_config = config();
+        new_config.network_interval_number = 3;
+        let info = initialize_network_info(
+            &new_config,
+            &old.encode(),
+            date(Month::October, 15),
+            "boot-1".into(),
+            1500,
+            3000,
+        )
+        .unwrap();
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (0, 0));
+        assert_eq!((info.offset_tx, info.offset_rx), (-1500, -3000));
+        assert_eq!(
+            info.next_reset_timestamp,
+            date(Month::November, 15).unix_timestamp()
+        );
+    }
+
+    #[test]
+    fn reboot_after_boundary_does_not_add_previous_cycle_bytes() {
+        let old = saved(config());
+        let info = initialize_network_info(
+            &config(),
+            &old.encode(),
+            date(Month::October, 15),
+            "boot-2".into(),
+            100,
+            200,
+        )
+        .unwrap();
+        assert_eq!((info.offset_tx, info.offset_rx), (-100, -200));
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (0, 0));
+    }
+
+    #[test]
+    fn restart_keeps_traffic_since_last_save_and_reboot_keeps_saved_traffic() {
+        let old = saved(config());
+        let restarted = initialize_network_info(
+            &config(),
+            &old.encode(),
+            date(Month::October, 14),
+            "boot-1".into(),
+            1300,
+            2600,
+        )
+        .unwrap();
+        assert_eq!(
+            (restarted.cycle_total_tx, restarted.cycle_total_rx),
+            (300, 600)
+        );
+        let rebooted = initialize_network_info(
+            &config(),
+            &old.encode(),
+            date(Month::October, 14),
+            "boot-2".into(),
+            50,
+            100,
+        )
+        .unwrap();
+        assert_eq!(
+            (rebooted.cycle_total_tx, rebooted.cycle_total_rx),
+            (250, 500)
+        );
+    }
+
+    #[test]
+    fn interface_counter_reset_preserves_accumulated_traffic() {
+        let mut info = saved(config());
+        info.update_totals(1300, 2600);
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (300, 600));
+        info.update_totals(50, 100);
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (300, 600));
+        info.update_totals(70, 140);
+        assert_eq!((info.cycle_total_tx, info.cycle_total_rx), (320, 640));
+        let restarted = initialize_network_info(
+            &config(),
+            &info.encode(),
+            date(Month::October, 14),
+            "boot-1".into(),
+            100,
+            200,
+        )
+        .unwrap();
+        assert_eq!(
+            (restarted.cycle_total_tx, restarted.cycle_total_rx),
+            (350, 700)
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn reset_uses_server_timezone_and_target_date_dst() {
+        const CHILD: &str = "KOMARI_TEST_TRAFFIC_TIMEZONE";
+        if let Ok(zone) = std::env::var(CHILD) {
+            let config = config();
+            let (now, expected) = if zone == "Asia/Shanghai" {
+                // October 15 02:00 locally: the next reset is November 15 00:00.
+                (1_792_000_800, 1_794_672_000)
+            } else {
+                // New York moves from UTC-4 to UTC-5 before November 15.
+                (1_792_123_200, 1_794_718_800)
+            };
+            assert_eq!(
+                calculate_next_reset_timestamp(
+                    &config,
+                    OffsetDateTime::from_unix_timestamp(now).unwrap()
+                )
+                .unwrap(),
+                expected
+            );
+            return;
+        }
+        // Isolate TZ from the parallel test runner and Tokio worker threads.
+        for zone in ["Asia/Shanghai", "America/New_York"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "get_info::network::network_saver::tests::reset_uses_server_timezone_and_target_date_dst", "--nocapture"])
+                .env(CHILD, zone).env("TZ", zone).status().unwrap();
+            assert!(status.success(), "timezone case {zone} failed");
+        }
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn legacy_utc_boundary_moves_to_local_midnight_on_upgrade() {
+        const CHILD: &str = "KOMARI_TEST_TRAFFIC_MIGRATION_TIMEZONE";
+        if let Ok(zone) = std::env::var(CHILD) {
+            let config = config();
+            let mut old = saved(config.clone());
+            // The old implementation persisted October 15 00:00 UTC.
+            old.next_reset_timestamp = 1_792_022_400;
+            let cases: &[(i64, i64, u64)] = if zone == "Asia/Shanghai" {
+                &[
+                    // Local October 14 20:00: retain traffic, shorten this cycle.
+                    (1_791_979_200, 1_791_993_600, 200),
+                    // Local October 15 02:00: the new cycle already began.
+                    (1_792_000_800, 1_794_672_000, 0),
+                ]
+            } else {
+                // Local October 14 21:00: UTC midnight passed, local midnight has not.
+                &[(1_792_026_000, 1_792_036_800, 200)]
+            };
+            for &(now, next_reset, total_tx) in cases {
+                let info = initialize_network_info(
+                    &config,
+                    &old.encode(),
+                    OffsetDateTime::from_unix_timestamp(now).unwrap(),
+                    "boot-1".into(),
+                    1200,
+                    2400,
+                )
+                .unwrap();
+                assert_eq!(info.next_reset_timestamp, next_reset);
+                assert_eq!(info.cycle_total_tx, total_tx);
+                assert_eq!(info.cycle_total_rx, total_tx * 2);
+            }
+            return;
+        }
+        for zone in ["Asia/Shanghai", "America/New_York"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "get_info::network::network_saver::tests::legacy_utc_boundary_moves_to_local_midnight_on_upgrade", "--nocapture"])
+                .env(CHILD, zone).env("TZ", zone).status().unwrap();
+            assert!(status.success(), "migration case {zone} failed");
+        }
+    }
+
+    #[test]
+    fn monthly_cycle_starts_on_reset_day_and_clamps_short_months() {
+        let mut config = config();
+        assert_eq!(
+            calculate_next_reset_timestamp(&config, date(Month::October, 14)).unwrap(),
+            date(Month::October, 15).unix_timestamp()
+        );
+        assert_eq!(
+            calculate_next_reset_timestamp(&config, date(Month::October, 15)).unwrap(),
+            date(Month::November, 15).unix_timestamp()
+        );
+        config.traffic_reset_day = "31".into();
+        assert_eq!(
+            calculate_next_reset_timestamp(&config, date(Month::February, 1)).unwrap(),
+            date(Month::February, 28).unix_timestamp()
+        );
+        assert_eq!(
+            calculate_next_reset_timestamp(&config, date(Month::February, 28)).unwrap(),
+            date(Month::March, 31).unix_timestamp()
+        );
     }
 }
