@@ -93,4 +93,5 @@ if (do_install true) > /dev/null 2>&1; then
 fi
 [[ ! -s "$actions" ]]
 cmp "$INSTALL_PATH" "$test_dir/previous"
+python3 "$repo_dir/tests/auto_discovery.py"
 echo 'Manager tests passed'

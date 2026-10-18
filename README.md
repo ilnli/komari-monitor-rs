@@ -151,6 +151,22 @@ sudo ./komari-manager.sh logs -f    # 实时跟踪
 sudo ./komari-manager.sh uninstall
 ```
 
+### 通过脚本自动发现
+
+执行 `sudo ./komari-manager.sh install`，在交互配置的“接入方式”中选择 **2. 自动发现**，
+填写 Komari 面板提供的自动发现密钥即可，无需提前创建节点或手工获取 Token。
+面板须已配置自动发现密钥；协议说明见[官方自动发现文档](https://komari-document.pages.dev/install/agent-ad)。
+
+脚本使用本机主机名向面板注册，取得节点 Token 后写入现有的 systemd 服务配置，
+Agent 继续使用 `--token` 上报。自动发现密钥输入时不回显，也不会写入服务配置。
+自动发现使用 `curl` 或 `wget`，并按需安装用于解析注册响应的 `jq`。
+注册请求沿用配置中是否忽略证书验证的选择；注册失败不会覆盖原服务配置。
+
+重启和升级会复用已保存的 Token，不会重复注册。
+已有安装可执行 `sudo ./komari-manager.sh config`，选择自动发现注册一个新节点；
+只修改其他设置时，保留默认的 **1. 手动 Token** 并在 Token 提示处回车，即可复用当前节点。
+删除服务配置后重新自动发现会创建新节点。
+
 ## 与原版的差异
 
 当前支持基础监控、Ping、远程命令和终端；以下官方功能尚未实现：

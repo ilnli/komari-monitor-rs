@@ -62,24 +62,31 @@ check_service_running() {
 
 # --- 依赖安装 ---
 install_dependencies() {
-    if command -v wget &> /dev/null || command -v curl &> /dev/null; then
+    local packages=()
+    if ! command -v wget &> /dev/null && ! command -v curl &> /dev/null; then
+        packages+=(wget)
+    fi
+    if [[ "${1:-}" == auto-discovery ]] && ! command -v jq &> /dev/null; then
+        packages+=(jq)
+    fi
+    if [ "${#packages[@]}" -eq 0 ]; then
         return
     fi
 
-    log_info "正在安装下载工具..."
+    log_info "正在安装依赖: ${packages[*]}..."
     if command -v apt-get &> /dev/null; then
-        apt-get update && apt-get install -y wget
+        apt-get update && apt-get install -y "${packages[@]}"
     elif command -v yum &> /dev/null; then
-        yum install -y wget
+        yum install -y "${packages[@]}"
     elif command -v dnf &> /dev/null; then
-        dnf install -y wget
+        dnf install -y "${packages[@]}"
     elif command -v pacman &> /dev/null; then
-        pacman -Sy --noconfirm wget
+        pacman -Sy --noconfirm "${packages[@]}"
     elif command -v apk &> /dev/null; then
-        apk add wget
+        apk add "${packages[@]}"
     else
-        log_error "未找到支持的包管理器，请手动安装 wget 或 curl"
-        exit 1
+        log_error "未找到支持的包管理器，请手动安装: ${packages[*]}"
+        return 1
     fi
 }
 
@@ -96,6 +103,45 @@ download_file() {
         log_error "未找到 curl 或 wget"
         return 1
     fi
+}
+
+# --- 使用自动发现密钥注册，后续沿用普通 Token 配置 ---
+register_client() {
+    local http_server="$1" key="$2" ignore_cert="${3:-false}"
+    install_dependencies auto-discovery || return 1
+
+    local name body response token
+    name=$(jq -nr --arg name "$(hostname)" '$name | @uri') || return 1
+    body=$(jq -cn --arg key "$key" '{key: $key}') || return 1
+    local url="${http_server%/}/api/clients/register?name=${name}"
+    local options=()
+    log_info "正在通过自动发现注册节点..."
+    if command -v curl &> /dev/null; then
+        options=(--fail --silent --show-error --connect-timeout 10 --max-time 30
+            --request POST --header "Authorization: Bearer ${key}"
+            --header 'Content-Type: application/json' --data "$body")
+        [ "$ignore_cert" = true ] && options+=(--insecure)
+        response=$(curl "${options[@]}" "$url") || {
+            log_error "自动发现注册失败，请检查服务器地址、自动发现密钥和证书"
+            return 1
+        }
+    else
+        options=(--no-verbose --timeout=30 --tries=1 --max-redirect=0 --output-document=-
+            --header="Authorization: Bearer ${key}"
+            --header='Content-Type: application/json' --post-data="$body")
+        [ "$ignore_cert" = true ] && options+=(--no-check-certificate)
+        response=$(wget "${options[@]}" "$url") || {
+            log_error "自动发现注册失败，请检查服务器地址、自动发现密钥和证书"
+            return 1
+        }
+    fi
+    if ! token=$(jq -er 'select(.status == "success") | .data.token |
+        select(type == "string" and length > 0)' <<< "$response" 2>/dev/null); then
+        log_error "自动发现注册失败：服务器未返回有效 Token，请检查面板地址及自动发现设置"
+        return 1
+    fi
+    TOKEN="$token"
+    log_info "自动发现注册成功，节点 Token 将随服务配置保存"
 }
 
 # --- 架构检测 ---
@@ -242,6 +288,7 @@ EOF
 # --- 交互式配置 ---
 interactive_config() {
     local use_existing="${1:-false}"
+    local auth_mode auto_discovery_key=""
 
     # 如果有现有配置，先加载
     if [ "$use_existing" = "true" ] && parse_existing_config; then
@@ -281,13 +328,32 @@ interactive_config() {
     read -p "WebSocket 服务器地址 (留空自动推断) [${WS_SERVER}]: " input
     [ -n "$input" ] && WS_SERVER="$input"
 
-    # Token
-    read -p "认证 Token [${TOKEN:+********}]: " input
-    [ -n "$input" ] && TOKEN="$input"
-    if [ -z "$TOKEN" ]; then
-        log_error "Token 不能为空"
-        exit 1
-    fi
+    echo "接入方式:"
+    echo "  1. 手动 Token（已有 Token 可直接保留）"
+    echo "  2. 自动发现（使用密钥注册新节点）"
+    read -r -p "请选择接入方式 [1]: " auth_mode
+    case "${auth_mode:-1}" in
+        1)
+            read -r -p "认证 Token [${TOKEN:+********}]: " input
+            [ -n "$input" ] && TOKEN="$input"
+            if [ -z "$TOKEN" ]; then
+                log_error "Token 不能为空"
+                return 1
+            fi
+            ;;
+        2)
+            read -r -s -p "自动发现密钥（输入不回显）: " auto_discovery_key
+            echo ""
+            if [ -z "$auto_discovery_key" ]; then
+                log_error "自动发现密钥不能为空"
+                return 1
+            fi
+            ;;
+        *)
+            log_error "接入方式必须选择 1 或 2"
+            return 1
+            ;;
+    esac
 
     # 重置日当天服务器本地时间 00:00 开始新周期
     read -p "流量重置日 (每月1-31号，当天本地时间00:00) [${BILLING_DAY}]: " input
@@ -315,6 +381,10 @@ interactive_config() {
         if [ -n "$input" ]; then
             [[ "$input" =~ ^[Yy] ]] && IGNORE_CERT_FLAG="true" || IGNORE_CERT_FLAG="false"
         fi
+    fi
+
+    if [ -n "$auto_discovery_key" ]; then
+        register_client "$HTTP_SERVER" "$auto_discovery_key" "$IGNORE_CERT_FLAG" || return 1
     fi
 }
 
@@ -532,12 +602,12 @@ do_status() {
 do_config() {
     if ! check_service_exists; then
         log_warn "未找到服务配置，将创建新配置"
-        interactive_config false
+        interactive_config false || return 1
     else
         show_current_config
         read -p "是否修改配置? (y/N): " modify
         if [[ "$modify" =~ ^[Yy] ]]; then
-            interactive_config true
+            interactive_config true || return 1
         else
             return
         fi
@@ -565,14 +635,14 @@ Komari Monitor RS 管理脚本
 用法: $0 <命令> [选项]
 
 命令:
-  install     安装程序 (已安装则升级)
+  install     安装程序，新安装可选手动 Token 或自动发现 (已安装则升级)
   upgrade     升级到最新版本
   uninstall   卸载程序
   start       启动服务
   stop        停止服务
   restart     重启服务
   status      查看状态
-  config      修改配置
+  config      修改配置，可用自动发现注册新节点
   logs        查看日志
   help        显示帮助
 
@@ -632,7 +702,7 @@ main() {
         install)
             do_install false "$USE_PROXY" "$PROXY_URL"
             if ! check_service_exists; then
-                interactive_config false
+                interactive_config false || return 1
                 create_service_file "$HTTP_SERVER" "$WS_SERVER" "$TOKEN" \
                     "$FAKE" "$INTERVAL" "$BILLING_DAY" \
                     "$TLS_FLAG" "$IGNORE_CERT_FLAG" "$TERMINAL_FLAG" "$NETWORK_SAVE_PATH"
