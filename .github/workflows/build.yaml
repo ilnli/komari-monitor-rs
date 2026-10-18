@@ -3,7 +3,11 @@ name: Cross Build
 on:
   push:
     branches: ["**"]
+    paths:
+      - '**/*.rs'
   pull_request:
+    paths:
+      - '**/*.rs'
   workflow_dispatch:
 
 permissions:

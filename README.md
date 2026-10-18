@@ -10,19 +10,13 @@ Agent
 
 致力于实现[原版 Agent](https://github.com/komari-monitor/komari-agent) 的所有功能，并拓展更多功能
 
-## 近期更新
+版本变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-### 0.4.0：Komari v2 协议适配
+## 手动编译与运行
 
-依据[官方 Agent 文档](https://komari-monitor.github.io/komari-document/dev/agent.html)及
-[Komari 1.5.1 协议定义](https://github.com/komari-monitor/komari/blob/1.5.1/protocol/v2/jsonrpc.go)，
-基础信息、实时监控、Ping 和命令结果统一使用 `/api/clients/v2/rpc` 的 JSON-RPC 2.0 协议。
-
-- 首选 WebSocket，连接失败达到 `--max-retries` 后使用 HTTP POST 上报；后台按 `--reconnect-interval` 尝试恢复 WebSocket。
-- HTTP 回退通过上报响应中的 `result.events` 接收任务，并在后续上报中确认；没有额外的 `agent.pull` 长轮询，任务接收速度取决于上报间隔。独立终端 WebSocket 在 HTTP 回退期间不可用。
-- 命令按任务 ID 去重并缓存最近 256 个结果，避免上传重试或连接切换重复执行。缓存位于内存，重启后不保留。
-- `--endpoint` 是 `--http-server` 的别名；`--interval` 使用秒（支持小数），优先于原有的毫秒参数 `--realtime-info-interval`。
-- 基础信息默认每 5 分钟更新，可用 `--info-report-interval` 调整；远程命令和终端仍需显式启用 `--terminal`，`--disable-web-ssh` 可强制关闭。
+服务端需要支持 v2 JSON-RPC，主通道为 `/api/clients/v2/rpc`。
+Agent 首选 WebSocket，连接失败达到 `--max-retries` 后使用 HTTP POST 上报，
+并按 `--reconnect-interval` 尝试恢复 WebSocket。HTTP 回退期间的任务接收速度取决于上报间隔，终端不可用。
 
 编译和运行：
 
@@ -32,14 +26,13 @@ cargo build --release --features ureq-support --locked
 ```
 
 HTTPS 地址会自动使用 WSS。现有 `--http-server` / `--ws-server` 配置仍然有效。
-本版本要求服务端支持 v2，不再使用旧版 v1 上报接口。
 
 协议测试：`cargo test --features ureq-support --locked`。集成测试启动本地 HTTP/WebSocket 模拟服务，
 验证回退、恢复、任务去重及结果回传；不需要真实服务端令牌。
 
-### Windows Toast Notify
+## Windows 通知
 
-由于安全性问题，现在默认情况下在 Windows 系统下运行时会发送 Windows 系统 Toast 通知，内容为:
+默认情况下，在 Windows 系统下运行时会发送系统 Toast 通知，内容为:
 
 ```
 Komari-monitor-rs Is Running!
@@ -48,9 +41,9 @@ Komari-monitor-rs is an application used to monitor your system, granting it nea
 
 可以通过 `--disable-toast-notify` 参数关闭
 
-### Dry Run 支持
+## 数据预览
 
-现在可以不提供任何参数，仅提供 `--dry-run` 参数，以事先获取监控数据
+仅提供 `--dry-run` 参数即可预览监控数据，无需配置面板地址和 Token。
 
 每次正常运行前也将获取一次数据，若有误监控的项目请发送 DryRun 的输出到 Issue 中，比如各种不应该读取的硬盘、虚拟网卡等
 
@@ -69,7 +62,7 @@ eth0 | 00:22:48:58:ca:62 | UP: 0 GB / DOWN: 7 GB
 CONNS: TCP: 12 | UDP: 4
 ```
 
-### 周期流量累计与重置
+## 周期流量累计与重置
 
 流量统计分别上报本周期累计上传和下载字节数，两者之和是本周期总用量。
 设置每月 15 号重置，表示 **服务器本地时间每月 15 日 00:00 开始新周期**，
@@ -82,8 +75,8 @@ CONNS: TCP: 12 | UDP: 4
   --network-statistics-mode natural --traffic-period month --traffic-reset-day 15
 ```
 
-仅传 `--traffic-reset-day` 不会改变默认的 `fixed` 模式。管理脚本会自动配置自然月模式；
-0.4.0 管理脚本升级时也会修正旧脚本遗漏模式参数的问题，显式配置的 `fixed` 模式保持不变。
+仅传 `--traffic-reset-day` 不会改变默认的 `fixed` 模式。管理脚本会自动配置自然月模式，
+升级时会修正已有配置中遗漏的模式参数，显式配置的 `fixed` 模式保持不变。
 
 首次启用从零开始，无法回溯安装前的本周期流量；更改周期规则会开始新周期。
 Agent 重启保留同一周期的累计值，系统重启从最近保存的数据继续累计。
@@ -106,8 +99,6 @@ Agent 重启保留同一周期的累计值，系统重启从最近保存的数�
               清零周期是一月时，可选 1...31, 对应在下月的1...31日重置。  
               清零周期是一年时，格式为12/31，对应在下年的12/31日重置。  
 
-0.4.0 修复了首次计数、跨周期重启、采样配置变更影响周期，以及自然日期按服务器本地时间重置的问题。
-
 ## 管理脚本
 
 提供 Linux 管理脚本，支持安装、升级、配置、服务管理等功能。
@@ -129,7 +120,7 @@ sudo ./komari-manager.sh install
 # 使用代理安装 (中国大陆用户)
 sudo ./komari-manager.sh install --proxy
 
-# 升级前请先重新下载上面的管理脚本；升级会保留配置并修正旧版的流量周期参数
+# 升级前请先重新下载上面的管理脚本；升级会保留配置
 sudo ./komari-manager.sh upgrade
 
 # 修改配置
@@ -188,8 +179,10 @@ Agent 继续使用 `--token` 上报。自动发现密钥输入时不回显，也
 当前自动构建 Linux x86_64/aarch64 GNU、Windows x86_64 和 macOS arm64；管理脚本仅支持对应的 Linux 架构，
 下载后会检查 `SHA256SUMS` 和程序可运行性，验证通过才停止旧服务。
 
-发布流程为推送 `main` → 两种 HTTP 后端测试与管理脚本测试 → 四个平台构建 → 统一更新滚动 `latest` Release。
-其他分支和 PR 只测试、构建，不发布。Nix 包版本自动读取 `Cargo.toml`。
+自动 CI 仅在推送或 PR 包含 `.rs` 文件变更时运行，纯脚本或文档修改不会触发。
+包含 `.rs` 变更的 `main` 推送会经过两种 HTTP 后端测试与管理脚本测试、四个平台构建，
+随后统一更新滚动 `latest` Release；其他分支和 PR 只测试、构建。
+也可通过 Actions 的手动运行入口触发构建，选择 `main` 时会发布。Nix 包版本自动读取 `Cargo.toml`。
 
 后缀有 `musl` 字样的可以在任何 Linux 系统下运行
 
